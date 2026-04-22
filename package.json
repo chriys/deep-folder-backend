@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "sandcastle": "npx tsx .sandcastle/main.mts"
+  },
+  "dependencies": {
+    "@ai-hero/sandcastle": "^0.5.1",
+    "framer-motion": "^12.38.0"
+  }
+}

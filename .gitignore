@@ -1,0 +1,7 @@
+/node_modules
+
+# claude stuff
+.env
+.sandcastle/.env
+.env.local
+.env*.local
