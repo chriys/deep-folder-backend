@@ -1,3 +1,7 @@
+"""Application configuration via pydantic-settings."""
+from __future__ import annotations
+
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,6 +26,8 @@ class Settings(BaseSettings):
     llm_model: str = "deepseek-chat"
 
     spend_cap_usd: float = 10.0
+
+    sentry_dsn: str | None = Field(default=None)
 
 
 # Pinned price table: cost USD per 1M tokens.
