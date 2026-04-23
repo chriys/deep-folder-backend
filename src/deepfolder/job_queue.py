@@ -1,4 +1,3 @@
-import json
 from datetime import datetime, timezone, timedelta
 from typing import Any, Callable
 from io import BytesIO
@@ -87,26 +86,26 @@ class JobHandlers:
     _handlers: dict[str, Callable[[AsyncSession, Job], Any]] = {}
 
     @classmethod
-    def register(cls, job_type: str) -> Callable:
+    def register(cls, kind: str) -> Callable:
         """Decorator to register a job handler."""
         def decorator(func: Callable) -> Callable:
-            cls._handlers[job_type] = func
+            cls._handlers[kind] = func
             return func
         return decorator
 
     @classmethod
     async def execute(cls, session: AsyncSession, job: Job) -> None:
         """Execute a job by its type."""
-        handler = cls._handlers.get(job.job_type)
+        handler = cls._handlers.get(job.kind)
         if not handler:
-            raise ValueError(f"No handler registered for job type: {job.job_type}")
+            raise ValueError(f"No handler registered for job kind: {job.kind}")
         await handler(session, job)
 
 
 @JobHandlers.register("ingest_folder")
 async def handle_ingest_folder(session: AsyncSession, job: Job) -> None:
     """Ingest a Drive folder: list files, extract text, chunk, and persist."""
-    payload = json.loads(job.payload)
+    payload = job.payload
     folder_id = payload["folder_id"]
 
     result = await session.execute(select(Folder).where(Folder.id == folder_id))
@@ -276,7 +275,7 @@ async def _extract_and_chunk_docs(
 @JobHandlers.register("sync_folder")
 async def handle_sync_folder(session: AsyncSession, job: Job) -> None:
     """Sync a Drive folder: diff against database, add new files, remove deleted files."""
-    payload = json.loads(job.payload)
+    payload = job.payload
     folder_id = payload["folder_id"]
 
     result = await session.execute(select(Folder).where(Folder.id == folder_id))
