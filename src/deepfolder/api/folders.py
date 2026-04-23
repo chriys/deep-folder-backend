@@ -1,0 +1,130 @@
+import json
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from deepfolder.auth.dependencies import require_user
+from deepfolder.db import get_session
+from deepfolder.drive_client import DriveClient
+from deepfolder.models.folder import Folder
+from deepfolder.models.job import Job
+from deepfolder.models.user import User
+
+
+router = APIRouter(prefix="/folders", tags=["folders"])
+
+
+class FolderResponse(BaseModel):
+    id: int
+    user_id: int
+    drive_folder_id: str
+    name: str
+    state: str
+    file_count: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+@router.post("")
+async def create_folder(
+    payload: dict,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Create a folder from a Google Drive URL and enqueue ingest job."""
+    drive_url = payload.get("drive_url", "")
+    if not drive_url:
+        raise HTTPException(status_code=400, detail="drive_url is required")
+
+    drive_client = DriveClient()
+    try:
+        folder_id = drive_client.parse_folder_url(drive_url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    existing = await session.execute(
+        select(Folder).where(Folder.drive_folder_id == folder_id)
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="Folder already exists")
+
+    folder = Folder(
+        user_id=user.id,
+        drive_folder_id=folder_id,
+        name=folder_id,
+        state="pending",
+        file_count=0,
+    )
+    session.add(folder)
+    await session.flush()
+
+    job = Job(
+        job_type="ingest_folder",
+        status="pending",
+        payload=json.dumps({"folder_id": folder.id}),
+        user_id=user.id,
+    )
+    session.add(job)
+    await session.commit()
+
+    return FolderResponse.model_validate(folder).model_dump(mode="json")
+
+
+@router.get("")
+async def list_folders(
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+) -> list:
+    """List all folders for the current user."""
+    result = await session.execute(
+        select(Folder).where(Folder.user_id == user.id)
+    )
+    folders = result.scalars().all()
+    return [FolderResponse.model_validate(f).model_dump(mode="json") for f in folders]
+
+
+@router.get("/{folder_id}")
+async def get_folder(
+    folder_id: int,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Get a specific folder by ID."""
+    result = await session.execute(
+        select(Folder).where(
+            (Folder.id == folder_id) & (Folder.user_id == user.id)
+        )
+    )
+    folder = result.scalar_one_or_none()
+    if not folder:
+        raise HTTPException(status_code=404, detail="Folder not found")
+
+    return FolderResponse.model_validate(folder).model_dump(mode="json")
+
+
+@router.delete("/{folder_id}")
+async def delete_folder(
+    folder_id: int,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Delete a folder and cascade delete related records."""
+    result = await session.execute(
+        select(Folder).where(
+            (Folder.id == folder_id) & (Folder.user_id == user.id)
+        )
+    )
+    folder = result.scalar_one_or_none()
+    if not folder:
+        raise HTTPException(status_code=404, detail="Folder not found")
+
+    await session.execute(delete(Folder).where(Folder.id == folder_id))
+    await session.commit()
+
+    return {"status": "deleted"}
