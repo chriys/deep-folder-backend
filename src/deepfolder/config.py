@@ -13,5 +13,9 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8000/auth/google/callback"
 
+    voyage_api_key: str = ""
+    embedding_model: str = "voyage-4"
+    embedding_dimension: int = 1024
+
 
 settings = Settings()

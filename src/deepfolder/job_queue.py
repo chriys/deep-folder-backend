@@ -12,6 +12,7 @@ from googleapiclient.discovery import build
 from deepfolder.auth.token_vault import TokenVault
 from deepfolder.config import settings
 from deepfolder.drive_client import DriveClient
+from deepfolder.embedding_client import EmbeddingClient
 from deepfolder.models.folder import Folder
 from deepfolder.models.file import File
 from deepfolder.models.skipped_file import SkippedFile
@@ -171,6 +172,10 @@ async def handle_ingest_folder(session: AsyncSession, job: Job) -> None:
                     file_count += 1
                 except Exception:
                     pass
+
+        await session.commit()
+
+        await _embed_chunks_for_folder(session, folder.id)
 
         folder.state = "ready"
         folder.file_count = file_count
@@ -347,6 +352,26 @@ async def handle_sync_folder(session: AsyncSession, job: Job) -> None:
 
     except Exception as e:
         raise
+
+
+async def _embed_chunks_for_folder(session: AsyncSession, folder_id: int) -> None:
+    """Batch embed all chunks in a folder."""
+    result = await session.execute(
+        select(Chunk).join(File).where(File.folder_id == folder_id)
+    )
+    chunks = result.scalars().all()
+
+    if not chunks:
+        return
+
+    texts = [chunk.text for chunk in chunks]
+    embedding_client = EmbeddingClient(api_key=settings.voyage_api_key)
+    embeddings = await embedding_client.embed_chunks(texts)
+
+    for chunk, embedding in zip(chunks, embeddings):
+        chunk.embedding = embedding
+
+    await session.commit()
 
 
 def _get_skip_reason(mime_type: str) -> str | None:

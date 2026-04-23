@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, Integer, String, Text, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import ARRAY
 
 from deepfolder.db import Base
 
@@ -19,6 +20,7 @@ class Chunk(Base):
     anchor_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     deep_link: Mapped[str] = mapped_column(String(2048), nullable=False)
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding: Mapped[list[float] | None] = mapped_column(ARRAY(float), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
