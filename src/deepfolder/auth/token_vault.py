@@ -5,7 +5,12 @@ from cryptography.fernet import Fernet
 
 
 class TokenVault:
-    """Fernet-encrypts refresh tokens at app layer before DB storage."""
+    """Fernet-encrypts refresh tokens at app layer before DB storage.
+
+    Key rotation: When rotating to a new secret_key, instantiate a new vault with the new key
+    and decrypt all ciphertexts with the old vault, then re-encrypt with the new vault.
+    Old ciphertexts are tied to their key; there is no multi-key support in Fernet itself.
+    """
 
     def __init__(self, secret_key: str) -> None:
         key_bytes = hashlib.sha256(secret_key.encode()).digest()
