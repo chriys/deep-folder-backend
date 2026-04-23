@@ -25,7 +25,11 @@ from deepfolder.chunker import Chunker
 class JobQueue:
     @staticmethod
     async def dequeue_job(session: AsyncSession) -> Job | None:
-        """Get the next pending job that's ready to run."""
+        """Get the next pending job that's ready to run.
+
+        Uses FOR UPDATE SKIP LOCKED to allow concurrent workers to claim jobs
+        without blocking each other. Only one worker will claim each job.
+        """
         result = await session.execute(
             select(Job)
             .where(
@@ -34,6 +38,7 @@ class JobQueue:
             )
             .order_by(Job.created_at)
             .limit(1)
+            .with_for_update(skip_locked=True)
         )
         return result.scalar_one_or_none()
 
