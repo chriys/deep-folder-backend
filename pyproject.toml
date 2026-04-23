@@ -26,6 +26,7 @@ dependencies = [
     "tiktoken>=0.5.0",
     "structlog>=24.0",
     "sentry-sdk[fastapi]>=2.0",
+    "pgvector>=0.3.0",
 ]
 
 [project.optional-dependencies]
@@ -48,11 +49,27 @@ target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP"]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
 
 [tool.mypy]
 python_version = "3.12"
 strict = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = [
+    "google.*",
+    "googleapiclient.*",
+]
+ignore_missing_imports = true
 
 [dependency-groups]
 dev = [
