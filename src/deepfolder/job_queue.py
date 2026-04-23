@@ -21,6 +21,7 @@ from deepfolder.models.user import User
 from deepfolder.models.chunk import Chunk
 from deepfolder.extractors import PDFExtractor, GoogleDocsExtractor
 from deepfolder.chunker import Chunker
+from deepfolder.usage_tracker import UsageTracker, SpendCapExceeded
 
 
 class JobQueue:
@@ -180,7 +181,7 @@ async def handle_ingest_folder(session: AsyncSession, job: Job) -> None:
 
         await session.commit()
 
-        await _embed_chunks_for_folder(session, folder.id)
+        await _embed_chunks_for_folder(session, folder.id, folder.user_id)
 
         folder.state = "ready"
         folder.file_count = file_count
@@ -359,7 +360,7 @@ async def handle_sync_folder(session: AsyncSession, job: Job) -> None:
         raise
 
 
-async def _embed_chunks_for_folder(session: AsyncSession, folder_id: int) -> None:
+async def _embed_chunks_for_folder(session: AsyncSession, folder_id: int, user_id: int) -> None:
     """Batch embed all chunks in a folder."""
     result = await session.execute(
         select(Chunk).join(File).where(File.folder_id == folder_id)
@@ -369,9 +370,14 @@ async def _embed_chunks_for_folder(session: AsyncSession, folder_id: int) -> Non
     if not chunks:
         return
 
+    tracker = UsageTracker(session, user_id)
+    await tracker.check_spend_cap()
+
     texts = [chunk.text for chunk in chunks]
     embedding_client = EmbeddingClient(api_key=settings.voyage_api_key)
-    embeddings = await embedding_client.embed_chunks(texts)
+    embeddings, total_tokens = await embedding_client.embed_chunks(texts)
+
+    await tracker.record("embedding", settings.embedding_model, input_tokens=total_tokens, output_tokens=0)
 
     for chunk, embedding in zip(chunks, embeddings):
         chunk.embedding = embedding

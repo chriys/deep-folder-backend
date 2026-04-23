@@ -14,6 +14,7 @@ from deepfolder.llm_client import LLMClient
 from deepfolder.models.conversation import Conversation, Message
 from deepfolder.models.folder import Folder
 from deepfolder.models.user import User
+from deepfolder.usage_tracker import UsageTracker, SpendCapExceeded
 
 router = APIRouter(prefix="/conversations")
 
@@ -198,6 +199,12 @@ async def send_message(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    tracker = UsageTracker(db, user.id)
+    try:
+        await tracker.check_spend_cap()
+    except SpendCapExceeded as e:
+        raise HTTPException(status_code=429, detail=str(e))
+
     # Persist user message
     user_msg = Message(
         conversation_id=id,
@@ -256,6 +263,11 @@ async def send_message(
             db.add(assistant_msg)
             await db.commit()
             await db.refresh(assistant_msg)
+
+            # Record approximate token usage (streaming API does not expose exact counts)
+            input_tokens = len(system_prompt + user_prompt) // 4
+            output_tokens = len(full_content) // 4
+            await tracker.record("llm", settings.llm_model, input_tokens, output_tokens)
 
             # Terminal success event
             yield f"event: done\ndata: {json.dumps({'message_id': assistant_msg.id})}\n\n"

@@ -11,6 +11,7 @@ from deepfolder.citation_builder import Citation, PrimaryUnit
 from deepfolder.db import get_session
 from deepfolder.main import create_app
 from deepfolder.models.user import User
+from deepfolder.usage_tracker import SpendCapExceeded
 
 
 def _parse_sse(text: str) -> list[dict]:
@@ -56,6 +57,7 @@ def _override_session(return_conversation: MagicMock | None = None):
     session = AsyncMock(spec=AsyncSession)
     result = MagicMock()
     result.scalar_one_or_none.return_value = return_conversation
+    result.scalar.return_value = 0.0
     session.execute = AsyncMock(return_value=result)
     session.add = MagicMock()
     session.commit = AsyncMock()
@@ -199,7 +201,10 @@ async def test_send_message_success(app):
     with (
         patch("deepfolder.api.conversations.HybridSearch", return_value=mock_search_instance),
         patch("deepfolder.api.conversations.LLMClient", return_value=mock_llm_instance),
+        patch("deepfolder.api.conversations.UsageTracker") as mock_tracker_cls,
     ):
+        mock_tracker = AsyncMock()
+        mock_tracker_cls.return_value = mock_tracker
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -250,7 +255,10 @@ async def test_send_message_empty_citations_when_no_chunks_found(app):
     with (
         patch("deepfolder.api.conversations.HybridSearch", return_value=mock_search_instance),
         patch("deepfolder.api.conversations.LLMClient", return_value=mock_llm_instance),
+        patch("deepfolder.api.conversations.UsageTracker") as mock_tracker_cls,
     ):
+        mock_tracker = AsyncMock()
+        mock_tracker_cls.return_value = mock_tracker
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -264,3 +272,36 @@ async def test_send_message_empty_citations_when_no_chunks_found(app):
     assert len(events) == 2
     assert events[0]["event"] == "text_delta"
     assert events[1]["event"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_send_message_returns_429_when_spend_cap_exceeded(app):
+    _setup_auth(app)
+
+    mock_conv = MagicMock()
+    mock_conv.id = 1
+    mock_conv.folder_id = 1
+    mock_conv.user_id = 1
+
+    session = _override_session(return_conversation=mock_conv)
+
+    async def _get_session():
+        yield session
+
+    app.dependency_overrides[get_session] = _get_session
+
+    mock_tracker = MagicMock()
+    mock_tracker.check_spend_cap = AsyncMock(side_effect=SpendCapExceeded("Cap exceeded"))
+
+    with patch("deepfolder.api.conversations.UsageTracker", return_value=mock_tracker):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                f"/conversations/{mock_conv.id}/messages",
+                json={"content": "test"},
+            )
+
+    assert response.status_code == 429
+    data = response.json()
+    assert "Cap exceeded" in data["detail"]
