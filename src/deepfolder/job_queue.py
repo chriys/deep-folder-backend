@@ -1,10 +1,13 @@
 import json
 from datetime import datetime, timezone, timedelta
 from typing import Any, Callable
+from io import BytesIO
 
 from google.oauth2.credentials import Credentials
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.discovery import build
 
 from deepfolder.auth.token_vault import TokenVault
 from deepfolder.config import settings
@@ -14,6 +17,9 @@ from deepfolder.models.file import File
 from deepfolder.models.skipped_file import SkippedFile
 from deepfolder.models.job import Job
 from deepfolder.models.user import User
+from deepfolder.models.chunk import Chunk
+from deepfolder.extractors import PDFExtractor, GoogleDocsExtractor
+from deepfolder.chunker import Chunker
 
 
 class JobQueue:
@@ -92,7 +98,7 @@ class JobHandlers:
 
 @JobHandlers.register("ingest_folder")
 async def handle_ingest_folder(session: AsyncSession, job: Job) -> None:
-    """Ingest a Drive folder: list files, classify them, persist to database."""
+    """Ingest a Drive folder: list files, extract text, chunk, and persist."""
     payload = json.loads(job.payload)
     folder_id = payload["folder_id"]
 
@@ -120,6 +126,9 @@ async def handle_ingest_folder(session: AsyncSession, job: Job) -> None:
         )
 
         file_count = 0
+        chunker = Chunker()
+        drive_service = build("drive", "v3", credentials=credentials)
+
         for file_item in files:
             mime_type = file_item.get("mimeType", "application/octet-stream")
             file_id = file_item["id"]
@@ -147,7 +156,21 @@ async def handle_ingest_folder(session: AsyncSession, job: Job) -> None:
                     extracted_at=None,
                 )
                 session.add(file_obj)
-                file_count += 1
+                await session.flush()
+
+                try:
+                    await _extract_and_chunk_file(
+                        session,
+                        file_obj,
+                        mime_type,
+                        drive_service,
+                        credentials,
+                        chunker,
+                    )
+                    file_obj.extracted_at = datetime.now(timezone.utc)
+                    file_count += 1
+                except Exception:
+                    pass
 
         folder.state = "ready"
         folder.file_count = file_count
@@ -158,6 +181,85 @@ async def handle_ingest_folder(session: AsyncSession, job: Job) -> None:
         folder.file_count = 0
         await session.commit()
         raise
+
+
+async def _extract_and_chunk_file(
+    session: AsyncSession,
+    file_obj: File,
+    mime_type: str,
+    drive_service: Any,
+    credentials: Credentials,
+    chunker: Chunker,
+) -> None:
+    """Extract text from file and create chunks."""
+    if mime_type == "application/pdf":
+        await _extract_and_chunk_pdf(session, file_obj, drive_service, chunker)
+    elif mime_type == "application/vnd.google-apps.document":
+        await _extract_and_chunk_docs(session, file_obj, credentials, chunker)
+
+
+async def _extract_and_chunk_pdf(
+    session: AsyncSession,
+    file_obj: File,
+    drive_service: Any,
+    chunker: Chunker,
+) -> None:
+    """Download and chunk PDF file."""
+    request = drive_service.files().get_media(fileId=file_obj.drive_file_id)
+    fh = BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+
+    file_content = fh.getvalue()
+    pages = await PDFExtractor.extract_text(file_content)
+    chunks = chunker.chunk_pdf(pages, file_obj.drive_file_id)
+
+    for chunk_data in chunks:
+        chunk = Chunk(
+            file_id=file_obj.id,
+            primary_unit_type=chunk_data.primary_unit_type,
+            primary_unit_value=chunk_data.primary_unit_value,
+            text=chunk_data.text,
+            content_hash=chunk_data.content_hash,
+            token_count=chunk_data.token_count,
+            anchor_id=chunk_data.anchor_id,
+            deep_link=chunk_data.deep_link,
+            ordinal=chunk_data.ordinal,
+        )
+        session.add(chunk)
+
+    await session.flush()
+
+
+async def _extract_and_chunk_docs(
+    session: AsyncSession,
+    file_obj: File,
+    credentials: Credentials,
+    chunker: Chunker,
+) -> None:
+    """Extract and chunk Google Doc file."""
+    text, headings = await GoogleDocsExtractor.extract_with_headings(
+        file_obj.drive_file_id, credentials
+    )
+    chunks = chunker.chunk_docs(text, headings, file_obj.drive_file_id)
+
+    for chunk_data in chunks:
+        chunk = Chunk(
+            file_id=file_obj.id,
+            primary_unit_type=chunk_data.primary_unit_type,
+            primary_unit_value=chunk_data.primary_unit_value,
+            text=chunk_data.text,
+            content_hash=chunk_data.content_hash,
+            token_count=chunk_data.token_count,
+            anchor_id=chunk_data.anchor_id,
+            deep_link=chunk_data.deep_link,
+            ordinal=chunk_data.ordinal,
+        )
+        session.add(chunk)
+
+    await session.flush()
 
 
 def _get_skip_reason(mime_type: str) -> str | None:

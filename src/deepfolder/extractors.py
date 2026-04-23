@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import re
 from typing import Any
 from io import BytesIO
 
@@ -49,3 +51,55 @@ class GoogleDocsExtractor:
                 raise ValueError(f"Error extracting Google Doc {file_id}: {e}")
 
         return await asyncio.to_thread(_extract)
+
+    @staticmethod
+    async def extract_with_headings(
+        file_id: str, credentials: Credentials
+    ) -> tuple[str, list[dict[str, str]]]:
+        """Extract text and heading structure from Google Doc.
+        Returns (text, list of {text, anchor_id} dicts)."""
+        service = build("docs", "v1", credentials=credentials)
+
+        def _extract() -> tuple[str, list[dict[str, str]]]:
+            try:
+                doc = service.documents().get(documentId=file_id).execute()
+                text = GoogleDocsExtractor._extract_text_from_document(doc)
+                headings = GoogleDocsExtractor._extract_headings_from_document(doc)
+                return text, headings
+            except Exception as e:
+                raise ValueError(f"Error extracting Google Doc {file_id}: {e}")
+
+        return await asyncio.to_thread(_extract)
+
+    @staticmethod
+    def _extract_text_from_document(doc: dict[str, Any]) -> str:
+        """Extract plain text from Google Doc structure."""
+        text_parts = []
+        for element in doc.get("body", {}).get("content", []):
+            if "paragraph" in element:
+                para = element["paragraph"]
+                for run in para.get("elements", []):
+                    if "textRun" in run:
+                        text_parts.append(run["textRun"]["content"])
+        return "".join(text_parts)
+
+    @staticmethod
+    def _extract_headings_from_document(doc: dict[str, Any]) -> list[dict[str, str]]:
+        """Extract headings with anchor IDs from Google Doc structure."""
+        headings: list[dict[str, str]] = []
+        for element in doc.get("body", {}).get("content", []):
+            if "paragraph" in element:
+                para = element["paragraph"]
+                style = para.get("paragraphStyle", {})
+                heading_id = style.get("headingId")
+
+                if heading_id:
+                    text_parts = []
+                    for run in para.get("elements", []):
+                        if "textRun" in run:
+                            text_parts.append(run["textRun"]["content"])
+                    heading_text = "".join(text_parts).strip()
+                    if heading_text:
+                        headings.append({"text": heading_text, "anchor_id": heading_id})
+
+        return headings
