@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock, patch
 import pytest
 import httpx
@@ -56,12 +57,12 @@ async def test_embed_chunks_multiple_batches(embedding_client: EmbeddingClient) 
 async def test_embed_chunks_respects_batch_size(embedding_client: EmbeddingClient) -> None:
     texts = [f"Text {i}" for i in range(300)]
 
-    mock_response = {
-        "data": [{"embedding": [0.1] * 1024} for _ in range(128)]
-    }
-
     with patch.object(embedding_client, "_call_voyage_api", new_callable=AsyncMock) as mock_call:
-        mock_call.return_value = mock_response
+
+        async def mock_api(batch: list[str]) -> dict:
+            return {"data": [{"embedding": [0.1] * 1024} for _ in range(len(batch))]}
+
+        mock_call.side_effect = mock_api
 
         result = await embedding_client.embed_chunks(texts)
 
@@ -84,23 +85,19 @@ async def test_embed_chunks_empty_list(embedding_client: EmbeddingClient) -> Non
 async def test_embed_chunks_retry_on_429(embedding_client: EmbeddingClient) -> None:
     texts = ["Hello world"]
 
-    success_response = {
-        "data": [{"embedding": [0.1] * 1024}]
-    }
+    success_body = json.dumps({"data": [{"embedding": [0.1] * 1024}]}).encode()
 
     call_count = 0
 
-    async def mock_api_call(batch: list[str]) -> dict:
+    async def mock_post(*args: object, **kwargs: object) -> httpx.Response:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            raise httpx.HTTPStatusError("429", request=None, response=None)
-        return success_response
+            return httpx.Response(429, request=httpx.Request("POST", "https://example.com"))
+        return httpx.Response(200, content=success_body, request=httpx.Request("POST", "https://example.com"))
 
-    with patch.object(embedding_client, "_call_voyage_api", new_callable=AsyncMock) as mock_call:
-        mock_call.side_effect = mock_api_call
-
+    with patch.object(httpx.AsyncClient, "post", new=mock_post):
         result = await embedding_client.embed_chunks(texts)
 
         assert len(result) == 1
-        assert mock_call.call_count == 2
+        assert call_count == 2
