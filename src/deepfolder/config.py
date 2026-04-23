@@ -21,5 +21,14 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.deepseek.com/v1"
     llm_model: str = "deepseek-chat"
 
+    spend_cap_usd: float = 10.0
+
+
+# Pinned price table: cost USD per 1M tokens.
+# NOTE: Update these prices when models are re-pinned.
+MODEL_PRICES: dict[str, dict[str, float]] = {
+    "deepseek-chat": {"input_per_1m": 2.00, "output_per_1m": 8.00},
+    "voyage-4": {"input_per_1m": 0.10, "output_per_1m": 0.00},
+}
 
 settings = Settings()

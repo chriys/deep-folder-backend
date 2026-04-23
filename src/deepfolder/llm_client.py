@@ -12,7 +12,7 @@ class LLMClient:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=30),
     )
-    async def generate(self, system_prompt: str, user_prompt: str) -> str:
+    async def generate(self, system_prompt: str, user_prompt: str) -> tuple[str, int, int]:
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(
                 f"{self.base_url}/chat/completions",
@@ -27,4 +27,8 @@ class LLMClient:
             )
             response.raise_for_status()
             data = response.json()
-            return data["choices"][0]["message"]["content"]
+            usage = data.get("usage", {})
+            input_tokens = usage.get("prompt_tokens", 0)
+            output_tokens = usage.get("completion_tokens", 0)
+            content = data["choices"][0]["message"]["content"]
+            return content, input_tokens, output_tokens

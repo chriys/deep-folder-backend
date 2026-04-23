@@ -11,17 +11,19 @@ class EmbeddingClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
 
-    async def embed_chunks(self, texts: list[str]) -> list[list[float]]:
+    async def embed_chunks(self, texts: list[str]) -> tuple[list[list[float]], int]:
         if not texts:
-            return []
+            return [], 0
 
         embeddings = []
+        total_tokens = 0
         for i in range(0, len(texts), self.BATCH_SIZE):
             batch = texts[i : i + self.BATCH_SIZE]
-            batch_embeddings = await self._call_voyage_api(batch)
-            embeddings.extend([item["embedding"] for item in batch_embeddings["data"]])
+            response = await self._call_voyage_api(batch)
+            embeddings.extend([item["embedding"] for item in response["data"]])
+            total_tokens += response.get("usage", {}).get("total_tokens", 0)
 
-        return embeddings
+        return embeddings, total_tokens
 
     async def _call_voyage_api(self, texts: list[str]) -> dict:
         for attempt in range(self.MAX_RETRIES):

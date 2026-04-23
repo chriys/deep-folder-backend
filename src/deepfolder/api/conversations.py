@@ -11,6 +11,7 @@ from deepfolder.llm_client import LLMClient
 from deepfolder.models.conversation import Conversation, Message
 from deepfolder.models.folder import Folder
 from deepfolder.models.user import User
+from deepfolder.usage_tracker import UsageTracker, SpendCapExceeded
 
 router = APIRouter(prefix="/conversations")
 
@@ -201,6 +202,12 @@ async def send_message(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    tracker = UsageTracker(db, user.id)
+    try:
+        await tracker.check_spend_cap()
+    except SpendCapExceeded as e:
+        raise HTTPException(status_code=429, detail=str(e))
+
     # Persist user message
     user_msg = Message(
         conversation_id=id,
@@ -236,7 +243,9 @@ async def send_message(
         "Never fabricate citations or use citation markers not present in the context."
     )
     user_prompt = f"Context:\n{context_text}\n\nQuestion: {payload.content}"
-    assistant_content = await llm.generate(system_prompt, user_prompt)
+    assistant_content, input_tokens, output_tokens = await llm.generate(system_prompt, user_prompt)
+
+    await tracker.record("llm", settings.llm_model, input_tokens, output_tokens)
 
     # Persist assistant message with citations
     assistant_msg = Message(
