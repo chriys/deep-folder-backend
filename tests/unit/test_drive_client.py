@@ -49,3 +49,23 @@ def test_parse_folder_url_shared_drive_with_drive_id_rejected():
     client = DriveClient()
     with pytest.raises(ValueError, match="Shared Drives not yet supported"):
         client.parse_folder_url("0ADriveID123")
+
+
+@pytest.mark.asyncio
+async def test_list_folder_recursive_respects_depth_limit():
+    client = DriveClient()
+
+    with pytest.raises(ValueError, match="Depth limit exceeded"):
+        from google.oauth2.credentials import Credentials
+        creds = Credentials(token="fake_token")
+        await client.list_folder_recursive("folder123", creds, max_depth=6, max_files=500)
+
+
+@pytest.mark.asyncio
+async def test_list_folder_recursive_respects_file_limit():
+    client = DriveClient()
+
+    with pytest.raises(ValueError, match="File limit exceeded"):
+        from google.oauth2.credentials import Credentials
+        creds = Credentials(token="fake_token")
+        await client.list_folder_recursive("folder123", creds, max_depth=5, max_files=501)
