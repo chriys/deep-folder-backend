@@ -1,6 +1,9 @@
-from sqlalchemy import select, and_, text, cast
+from typing import Any
+
+from sqlalchemy import select, and_, text, cast, Float
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.engine import Row
 
 from deepfolder.embedding_client import EmbeddingClient
 from deepfolder.models.chunk import Chunk
@@ -10,7 +13,7 @@ from deepfolder.config import settings
 
 
 class HybridSearch:
-    def __init__(self):
+    def __init__(self) -> None:
         self.embedding_client = EmbeddingClient(api_key=settings.voyage_api_key)
 
     async def retrieve(
@@ -50,12 +53,12 @@ class HybridSearch:
         Returns tuples of (Chunk, cosine_similarity_score, File).
         Note: Uses 1 - (cosine_distance) to convert pgvector distance to similarity.
         """
-        query_vector = cast(query_embedding, ARRAY(float))
+        query_vector: Any = cast(query_embedding, ARRAY(Float))
 
-        result = await session.execute(
+        result: Any = await session.execute(
             select(
                 Chunk,
-                (1 - (Chunk.embedding.op("<->", return_type=float)(query_vector))).label("similarity"),
+                (1 - (Chunk.embedding.op("<->", return_type=Float)(query_vector))).label("similarity"),
                 File,
             )
             .join(File, Chunk.file_id == File.id)
@@ -69,5 +72,5 @@ class HybridSearch:
             .limit(k)
         )
 
-        chunks_with_files = result.all()
+        chunks_with_files: list[tuple[Chunk, float, File]] = result.all()
         return chunks_with_files
