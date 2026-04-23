@@ -1,3 +1,4 @@
+import json
 from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -10,6 +11,25 @@ from deepfolder.citation_builder import Citation, PrimaryUnit
 from deepfolder.db import get_session
 from deepfolder.main import create_app
 from deepfolder.models.user import User
+
+
+def _parse_sse(text: str) -> list[dict]:
+    """Parse SSE event stream text into a list of {event, data} dicts."""
+    events = []
+    for block in text.split("\n\n"):
+        block = block.strip()
+        if not block:
+            continue
+        event_type = None
+        data = None
+        for line in block.split("\n"):
+            if line.startswith("event: "):
+                event_type = line[7:]
+            elif line.startswith("data: "):
+                data = json.loads(line[6:])
+        if event_type and data is not None:
+            events.append({"event": event_type, "data": data})
+    return events
 
 
 async def _create_mock_session() -> AsyncGenerator[AsyncSession, None]:
@@ -170,9 +190,11 @@ async def test_send_message_success(app):
     )
 
     mock_llm_instance = MagicMock()
-    mock_llm_instance.generate = AsyncMock(
-        return_value="Based on the document, the answer is X."
-    )
+
+    async def mock_stream(system_prompt, user_prompt):
+        yield "Based on the document, the answer is X."
+
+    mock_llm_instance.generate_stream = mock_stream
 
     with (
         patch("deepfolder.api.conversations.HybridSearch", return_value=mock_search_instance),
@@ -186,13 +208,17 @@ async def test_send_message_success(app):
                 json={"content": "What does the document say?"},
             )
 
-    assert response.status_code == 201
-    data = response.json()
-    assert data["message_id"] == 100
-    assert data["content"] == "Based on the document, the answer is X."
-    assert len(data["citations"]) == 1
-    assert data["citations"][0]["chunk_id"] == 1
-    assert data["citations"][0]["file_name"] == "test.pdf"
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+    events = _parse_sse(response.text)
+    assert len(events) == 3
+    assert events[0]["event"] == "citation"
+    assert events[0]["data"]["citation"]["chunk_id"] == 1
+    assert events[0]["data"]["citation"]["file_name"] == "test.pdf"
+    assert events[1]["event"] == "text_delta"
+    assert events[1]["data"]["delta"] == "Based on the document, the answer is X."
+    assert events[2]["event"] == "done"
+    assert events[2]["data"]["message_id"] == 100
 
 
 @pytest.mark.asyncio
@@ -215,9 +241,11 @@ async def test_send_message_empty_citations_when_no_chunks_found(app):
     mock_search_instance.retrieve = AsyncMock(return_value=[])
 
     mock_llm_instance = MagicMock()
-    mock_llm_instance.generate = AsyncMock(
-        return_value="I could not find information about that in the documents."
-    )
+
+    async def mock_stream(system_prompt, user_prompt):
+        yield "I could not find information about that in the documents."
+
+    mock_llm_instance.generate_stream = mock_stream
 
     with (
         patch("deepfolder.api.conversations.HybridSearch", return_value=mock_search_instance),
@@ -231,6 +259,8 @@ async def test_send_message_empty_citations_when_no_chunks_found(app):
                 json={"content": "What about this?"},
             )
 
-    assert response.status_code == 201
-    data = response.json()
-    assert data["citations"] == []
+    assert response.status_code == 200
+    events = _parse_sse(response.text)
+    assert len(events) == 2
+    assert events[0]["event"] == "text_delta"
+    assert events[1]["event"] == "done"

@@ -1,7 +1,10 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import StreamingResponse
 
 from deepfolder.auth.dependencies import require_user
 from deepfolder.config import settings
@@ -53,12 +56,6 @@ class ConversationResponse(BaseModel):
 
 class SendMessageRequest(BaseModel):
     content: str
-
-
-class SendMessageResponse(BaseModel):
-    message_id: int
-    content: str
-    citations: list[dict]
 
 
 @router.post("", status_code=201, response_model=ConversationResponse)
@@ -186,13 +183,13 @@ async def delete_conversation(
     await db.commit()
 
 
-@router.post("/{id}/messages", status_code=201)
+@router.post("/{id}/messages")
 async def send_message(
     id: int,
     payload: SendMessageRequest,
     user: User = Depends(require_user),
     db: AsyncSession = Depends(get_session),
-) -> SendMessageResponse:
+):
     result = await db.execute(
         select(Conversation).where(Conversation.id == id, Conversation.user_id == user.id)
     )
@@ -236,21 +233,33 @@ async def send_message(
         "Never fabricate citations or use citation markers not present in the context."
     )
     user_prompt = f"Context:\n{context_text}\n\nQuestion: {payload.content}"
-    assistant_content = await llm.generate(system_prompt, user_prompt)
 
-    # Persist assistant message with citations
-    assistant_msg = Message(
-        conversation_id=id,
-        role="assistant",
-        content=assistant_content,
-        citations=citations,
-    )
-    db.add(assistant_msg)
-    await db.commit()
-    await db.refresh(assistant_msg)
+    async def event_stream():
+        full_content = ""
+        try:
+            # Emit citation events before streaming (so clients render references first)
+            for c in citations:
+                yield f"event: citation\ndata: {json.dumps({'citation': c})}\n\n"
 
-    return SendMessageResponse(
-        message_id=assistant_msg.id,
-        content=assistant_content,
-        citations=citations,
-    )
+            # Stream LLM response token by token
+            async for delta in llm.generate_stream(system_prompt, user_prompt):
+                full_content += delta
+                yield f"event: text_delta\ndata: {json.dumps({'delta': delta})}\n\n"
+
+            # Persist assistant message with full content and citations
+            assistant_msg = Message(
+                conversation_id=id,
+                role="assistant",
+                content=full_content,
+                citations=citations,
+            )
+            db.add(assistant_msg)
+            await db.commit()
+            await db.refresh(assistant_msg)
+
+            # Terminal success event
+            yield f"event: done\ndata: {json.dumps({'message_id': assistant_msg.id})}\n\n"
+        except Exception:
+            yield f"event: error\ndata: {json.dumps({'code': 'internal_error', 'message': 'Failed to generate response'})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
