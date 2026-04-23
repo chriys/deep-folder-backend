@@ -1,12 +1,15 @@
 from collections.abc import AsyncGenerator
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from deepfolder.auth.dependencies import require_user
+from deepfolder.citation_builder import Citation, PrimaryUnit
 from deepfolder.db import get_session
 from deepfolder.main import create_app
+from deepfolder.models.user import User
 
 
 async def _create_mock_session() -> AsyncGenerator[AsyncSession, None]:
@@ -19,6 +22,35 @@ def app():
     application = create_app()
     application.dependency_overrides[get_session] = _create_mock_session
     return application
+
+
+def _override_user() -> User:
+    user = MagicMock(spec=User)
+    user.id = 1
+    user.email = "test@example.com"
+    return user
+
+
+def _override_session(return_conversation: MagicMock | None = None):
+    """Set up a session mock with optional conversation return value."""
+    session = AsyncMock(spec=AsyncSession)
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = return_conversation
+    session.execute = AsyncMock(return_value=result)
+    session.add = MagicMock()
+    session.commit = AsyncMock()
+
+    async def refresh_side_effect(obj):
+        if hasattr(obj, "id") and obj.id is None:
+            obj.id = 100
+
+    session.refresh = AsyncMock(side_effect=refresh_side_effect)
+    return session
+
+
+def _setup_auth(app):
+    """Set up auth override for authenticated tests."""
+    app.dependency_overrides[require_user] = _override_user
 
 
 @pytest.mark.asyncio
@@ -62,3 +94,143 @@ async def test_delete_conversation_requires_auth(app):
         response = await client.delete("/conversations/1")
 
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_send_message_requires_auth(app):
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/conversations/1/messages",
+            json={"content": "hello"},
+        )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_send_message_returns_404_for_nonexistent_conversation(app):
+    _setup_auth(app)
+    session = _override_session(return_conversation=None)
+
+    async def _get_session():
+        yield session
+
+    app.dependency_overrides[get_session] = _get_session
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/conversations/999/messages",
+            json={"content": "hello"},
+        )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_send_message_success(app):
+    _setup_auth(app)
+
+    mock_conv = MagicMock()
+    mock_conv.id = 1
+    mock_conv.folder_id = 1
+    mock_conv.user_id = 1
+
+    session = _override_session(return_conversation=mock_conv)
+
+    async def _get_session():
+        yield session
+
+    app.dependency_overrides[get_session] = _get_session
+
+    # Mock HybridSearch result
+    mock_chunk = MagicMock()
+    mock_chunk.id = 1
+    mock_chunk.text = "test chunk text"
+    mock_chunk.file_id = 1
+    mock_chunk.deep_link = "https://example.com"
+    mock_chunk.primary_unit_type = "pdf_page"
+    mock_chunk.primary_unit_value = "1"
+
+    mock_citation = Citation(
+        chunk_id=1,
+        file_id=1,
+        file_name="test.pdf",
+        primary_unit=PrimaryUnit(type="pdf_page", value="1"),
+        quote="test chunk text",
+        deep_link="https://example.com",
+    )
+
+    mock_search_instance = MagicMock()
+    mock_search_instance.retrieve = AsyncMock(
+        return_value=[(mock_chunk, 0.95, mock_citation)]
+    )
+
+    mock_llm_instance = MagicMock()
+    mock_llm_instance.generate = AsyncMock(
+        return_value="Based on the document, the answer is X."
+    )
+
+    with (
+        patch("deepfolder.api.conversations.HybridSearch", return_value=mock_search_instance),
+        patch("deepfolder.api.conversations.LLMClient", return_value=mock_llm_instance),
+    ):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                f"/conversations/{mock_conv.id}/messages",
+                json={"content": "What does the document say?"},
+            )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["message_id"] == 100
+    assert data["content"] == "Based on the document, the answer is X."
+    assert len(data["citations"]) == 1
+    assert data["citations"][0]["chunk_id"] == 1
+    assert data["citations"][0]["file_name"] == "test.pdf"
+
+
+@pytest.mark.asyncio
+async def test_send_message_empty_citations_when_no_chunks_found(app):
+    _setup_auth(app)
+
+    mock_conv = MagicMock()
+    mock_conv.id = 1
+    mock_conv.folder_id = 1
+    mock_conv.user_id = 1
+
+    session = _override_session(return_conversation=mock_conv)
+
+    async def _get_session():
+        yield session
+
+    app.dependency_overrides[get_session] = _get_session
+
+    mock_search_instance = MagicMock()
+    mock_search_instance.retrieve = AsyncMock(return_value=[])
+
+    mock_llm_instance = MagicMock()
+    mock_llm_instance.generate = AsyncMock(
+        return_value="I could not find information about that in the documents."
+    )
+
+    with (
+        patch("deepfolder.api.conversations.HybridSearch", return_value=mock_search_instance),
+        patch("deepfolder.api.conversations.LLMClient", return_value=mock_llm_instance),
+    ):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                f"/conversations/{mock_conv.id}/messages",
+                json={"content": "What about this?"},
+            )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["citations"] == []

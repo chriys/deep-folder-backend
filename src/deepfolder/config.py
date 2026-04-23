@@ -17,5 +17,9 @@ class Settings(BaseSettings):
     embedding_model: str = "voyage-4"
     embedding_dimension: int = 1024
 
+    llm_api_key: str = ""
+    llm_base_url: str = "https://api.deepseek.com/v1"
+    llm_model: str = "deepseek-chat"
+
 
 settings = Settings()
