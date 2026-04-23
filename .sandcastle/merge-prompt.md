@@ -1,6 +1,6 @@
 # TASK
 
-Merge the following branches into the current branch:
+Merge the following branches into the current branch and keep the original Dockerfile, *.md, *.mts files  .sandcastle/ folder:
 
 {{BRANCHES}}
 
@@ -11,15 +11,15 @@ For each branch:
 3. After resolving conflicts, run `npm run typecheck` and `npm run test` to verify everything works
 4. If tests fail, fix the issues before proceeding to the next branch
 
-After all branches are merged, make a single commit summarizing the merge.
+After all branches are merged, make a single commit summarizing the merge prefixing it with `RALPH: <model>:`. Where `<model>` is the name of the model used.
 
 # CLOSE ISSUES
 
-For each branch that was merged, close its issue using the following command:
+For each issue listed below, close it using:
 
-`gh issue close {{TASK_ID}} --comment "Completed by Sandcastle"`
+`gh issue close <id> --comment "Completed by Sandcastle"`
 
-Here are all the issues:
+where `<id>` is the issue ID from the list.
 
 {{ISSUES}}
 
