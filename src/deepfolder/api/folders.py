@@ -1,9 +1,9 @@
 import json
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from deepfolder.auth.dependencies import require_user
@@ -128,3 +128,48 @@ async def delete_folder(
     await session.commit()
 
     return {"status": "deleted"}
+
+
+@router.post("/{folder_id}/sync", status_code=status.HTTP_202_ACCEPTED)
+async def sync_folder(
+    folder_id: int,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Trigger a manual sync of a folder."""
+    result = await session.execute(
+        select(Folder).where(
+            (Folder.id == folder_id) & (Folder.user_id == user.id)
+        )
+    )
+    folder = result.scalar_one_or_none()
+    if not folder:
+        raise HTTPException(status_code=404, detail="Folder not found")
+
+    existing_jobs = await session.execute(
+        select(Job).where(
+            and_(
+                Job.status == "pending",
+                or_(
+                    Job.job_type == "sync_folder",
+                    Job.job_type == "ingest_folder"
+                ),
+            )
+        )
+    )
+
+    for job in existing_jobs.scalars():
+        job_payload = json.loads(job.payload)
+        if job_payload.get("folder_id") == folder_id:
+            raise HTTPException(status_code=409, detail="Sync or ingest already in progress")
+
+    job = Job(
+        job_type="sync_folder",
+        status="pending",
+        payload=json.dumps({"folder_id": folder_id}),
+        user_id=user.id,
+    )
+    session.add(job)
+    await session.commit()
+
+    return {"job_id": job.id, "status": "accepted"}

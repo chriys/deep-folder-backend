@@ -62,3 +62,13 @@ async def test_delete_folder_requires_auth(app):
         response = await client.delete("/folders/1")
 
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_sync_folder_requires_auth(app):
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post("/folders/1/sync")
+
+    assert response.status_code == 401
