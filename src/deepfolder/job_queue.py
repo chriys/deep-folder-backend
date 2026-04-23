@@ -160,6 +160,93 @@ async def handle_ingest_folder(session: AsyncSession, job: Job) -> None:
         raise
 
 
+@JobHandlers.register("sync_folder")
+async def handle_sync_folder(session: AsyncSession, job: Job) -> None:
+    """Sync a Drive folder: diff against database, add new files, remove deleted files."""
+    payload = json.loads(job.payload)
+    folder_id = payload["folder_id"]
+
+    result = await session.execute(select(Folder).where(Folder.id == folder_id))
+    folder = result.scalar_one_or_none()
+    if not folder:
+        raise ValueError(f"Folder {folder_id} not found")
+
+    user_result = await session.execute(select(User).where(User.id == folder.user_id))
+    user = user_result.scalar_one_or_none()
+    if not user or not user.encrypted_refresh_token:
+        raise ValueError(f"User credentials not found for folder {folder_id}")
+
+    try:
+        vault = TokenVault(settings.secret_key)
+        refresh_token = vault.decrypt(user.encrypted_refresh_token)
+        credentials = Credentials(token=None, refresh_token=refresh_token)
+
+        client = DriveClient()
+        drive_files = await client.list_folder_recursive(
+            folder.drive_folder_id, credentials, max_depth=5, max_files=500
+        )
+
+        current_db_files = await session.execute(
+            select(File).where(File.folder_id == folder.id)
+        )
+        db_files_dict = {f.drive_file_id: f for f in current_db_files.scalars()}
+
+        drive_file_ids = {f["id"] for f in drive_files}
+        db_file_ids = set(db_files_dict.keys())
+
+        added_ids = drive_file_ids - db_file_ids
+        removed_ids = db_file_ids - drive_file_ids
+
+        added_count = 0
+        removed_count = 0
+
+        for file_item in drive_files:
+            file_id = file_item["id"]
+            if file_id not in added_ids:
+                continue
+
+            mime_type = file_item.get("mimeType", "application/octet-stream")
+            reason = _get_skip_reason(mime_type)
+            if reason:
+                skipped = SkippedFile(
+                    folder_id=folder.id,
+                    drive_file_id=file_id,
+                    name=file_item["name"],
+                    mime_type=mime_type,
+                    reason=reason,
+                )
+                session.add(skipped)
+                continue
+
+            modified_time = datetime.fromisoformat(
+                file_item["modifiedTime"].replace("Z", "+00:00")
+            )
+            file_obj = File(
+                folder_id=folder.id,
+                drive_file_id=file_id,
+                name=file_item["name"],
+                mime_type=mime_type,
+                modified_time=modified_time,
+                extracted_at=None,
+            )
+            session.add(file_obj)
+            added_count += 1
+
+        for file_id in removed_ids:
+            file_obj = db_files_dict[file_id]
+            session.delete(file_obj)
+            removed_count += 1
+
+        await session.commit()
+
+        new_file_count = len(db_file_ids) - removed_count + added_count
+        folder.file_count = new_file_count
+        await session.commit()
+
+    except Exception as e:
+        raise
+
+
 def _get_skip_reason(mime_type: str) -> str | None:
     """Determine if a file should be skipped and return the reason."""
     if mime_type.startswith("image/"):
