@@ -21,8 +21,17 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.execute("ALTER TABLE chunks ADD COLUMN embedding vector(1024)")
-    op.execute("CREATE INDEX ix_chunks_embedding_ivfflat ON chunks USING ivfflat (embedding vector_cosine_ops)")
+    conn = op.get_bind()
+    result = conn.execute(sa.text(
+        "SELECT 1 FROM pg_extension WHERE extname = 'vector'"
+    ))
+    if result.fetchone() is None:
+        return
+    op.execute(sa.text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS embedding vector(1024)"))
+    op.execute(sa.text(
+        "CREATE INDEX IF NOT EXISTS ix_chunks_embedding_ivfflat "
+        "ON chunks USING ivfflat (embedding vector_cosine_ops)"
+    ))
 
 
 def downgrade() -> None:

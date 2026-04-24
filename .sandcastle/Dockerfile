@@ -39,8 +39,16 @@ ENV PATH="/home/agent/.local/bin:$PATH"
 
 WORKDIR /home/agent
 
-# Attempt to optimize token usage using mksglu/context-mode plugin via mcp installation
-RUN claude mcp add context-mode -- npx -y context-mode
+# Install Token Optimization tools
+# Reduce command output to context window
+RUN curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
+RUN rtk init -g
+
+# Optimize code navigation token usage using mksglu/context-mode plugin
+RUN claude plugin marketplace add mksglu/context-mode && claude plugin install context-mode@context-mode
+
+# Talk like caveman optimize output token
+RUN claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman
 
 # Install a 21st.dev mcp for premium design
 RUN claude mcp add magic --scope user --env API_KEY="$21ST_DEV_API_KEY" -- npx -y @21st-dev/magic@latest

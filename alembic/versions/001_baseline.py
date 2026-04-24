@@ -5,8 +5,8 @@ Revises:
 Create Date: 2026-04-23 00:00:00.000000
 
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 
 # revision identifiers, used by Alembic.
@@ -17,7 +17,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    op.execute(sa.text(
+        "DO $$ BEGIN CREATE EXTENSION IF NOT EXISTS vector; "
+        "EXCEPTION WHEN insufficient_privilege THEN NULL; END $$"
+    ))
 
 
 def downgrade() -> None:

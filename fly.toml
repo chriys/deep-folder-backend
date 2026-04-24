@@ -5,7 +5,7 @@ primary_region = "iad"
   dockerfile = "Dockerfile"
 
 [deploy]
-  release_command = "alembic upgrade head"
+  release_command = "sh -c 'alembic upgrade 001 && alembic upgrade 0010 && alembic upgrade 0011'"
 
 [env]
   PORT = "8080"
@@ -16,6 +16,7 @@ primary_region = "iad"
   cpus = 1
 
 [http_service]
+  processes = ["api"]
   internal_port = 8080
   force_https = true
   auto_stop_machines = true

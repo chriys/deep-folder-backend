@@ -18,7 +18,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    op.execute(sa.text(
+        "DO $$ BEGIN CREATE EXTENSION IF NOT EXISTS vector; "
+        "EXCEPTION WHEN insufficient_privilege THEN NULL; END $$"
+    ))
 
 
 def downgrade() -> None:
