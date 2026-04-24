@@ -75,7 +75,13 @@ async def _get_user_email(token: str) -> str:
 
 
 @router.get("/google/start")
-async def auth_start() -> RedirectResponse:
+async def auth_start(return_to: str = settings.frontend_url) -> RedirectResponse:
+    allowed = {str(o).rstrip("/") for o in settings.cors_origins}
+    from urllib.parse import urlparse
+    origin = f"{urlparse(return_to).scheme}://{urlparse(return_to).netloc}"
+    if origin.rstrip("/") not in allowed:
+        raise HTTPException(status_code=400, detail="return_to origin not allowed")
+
     flow = flow_from_client_config()
     verifier, challenge = _generate_pkce_pair()
     auth_url, _ = flow.authorization_url(
@@ -85,7 +91,7 @@ async def auth_start() -> RedirectResponse:
         code_challenge=challenge,
         code_challenge_method="S256",
     )
-    signed = _pkce_serializer().dumps(verifier)
+    signed = _pkce_serializer().dumps({"verifier": verifier, "return_to": return_to})
     response = RedirectResponse(url=auth_url, status_code=302)
     response.set_cookie(
         PKCE_COOKIE_NAME,
@@ -108,9 +114,11 @@ async def auth_callback(
     if not signed_verifier:
         raise HTTPException(status_code=400, detail="Missing PKCE cookie")
     try:
-        verifier: str = _pkce_serializer().loads(signed_verifier, max_age=PKCE_MAX_AGE)
+        payload: dict[str, str] = _pkce_serializer().loads(signed_verifier, max_age=PKCE_MAX_AGE)
     except (BadSignature, SignatureExpired):
         raise HTTPException(status_code=400, detail="Invalid or expired PKCE cookie")
+    verifier: str = payload["verifier"]
+    return_to: str = payload.get("return_to", settings.frontend_url)
 
     flow = flow_from_client_config()
     flow.fetch_token(code=code, code_verifier=verifier)
@@ -134,7 +142,7 @@ async def auth_callback(
     await db.commit()
 
     session_mgr = SessionManager(settings.secret_key)
-    response = RedirectResponse(url=settings.frontend_url, status_code=302)
+    response = RedirectResponse(url=return_to, status_code=302)
     session_mgr.set_session(response, email)
     response.delete_cookie(PKCE_COOKIE_NAME)
     return response
