@@ -1,4 +1,5 @@
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
+from typing import Any
 
 from deepfolder.models.chunk import Chunk
 
@@ -18,7 +19,7 @@ class Citation:
     quote: str
     deep_link: str
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "chunk_id": self.chunk_id,
             "file_id": self.file_id,
@@ -32,7 +33,12 @@ class Citation:
 class CitationBuilder:
     @staticmethod
     def build(chunk: Chunk, file_name: str) -> Citation:
-        """Build a Citation from a Chunk row."""
+        """Build a Citation from a Chunk row.
+
+    Note: Office files (docx/pptx/xlsx) stored in Drive use file-level
+    deep links only. No section-level anchors are available for these
+    formats due to the absence of a Drive-native anchor system.
+    """
         return Citation(
             chunk_id=chunk.id,
             file_id=chunk.file_id,

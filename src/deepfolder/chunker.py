@@ -206,6 +206,69 @@ class Chunker:
 
         return chunks
 
+    def chunk_docx(
+        self, sections: list[tuple[str, str]], drive_file_id: str
+    ) -> list[ChunkData]:
+        """Chunk docx by heading sections. File-level deep link only."""
+        chunks: list[ChunkData] = []
+        ordinal = 0
+
+        for heading_text, section_text in sections:
+            section_chunks = self._chunk_text(
+                section_text,
+                primary_unit_type="docx_heading",
+                primary_unit_value=heading_text,
+                anchor_id=None,
+                deep_link=f"https://drive.google.com/file/d/{drive_file_id}/view",
+                start_ordinal=ordinal,
+            )
+            chunks.extend(section_chunks)
+            ordinal += len(section_chunks)
+
+        return chunks
+
+    def chunk_pptx(
+        self, slides: dict[int, str], drive_file_id: str
+    ) -> list[ChunkData]:
+        """Chunk pptx by slide. File-level deep link only."""
+        chunks: list[ChunkData] = []
+        ordinal = 0
+
+        for slide_num in sorted(slides.keys()):
+            slide_chunks = self._chunk_text(
+                slides[slide_num],
+                primary_unit_type="pptx_slide",
+                primary_unit_value=str(slide_num),
+                anchor_id=None,
+                deep_link=f"https://drive.google.com/file/d/{drive_file_id}/view",
+                start_ordinal=ordinal,
+            )
+            chunks.extend(slide_chunks)
+            ordinal += len(slide_chunks)
+
+        return chunks
+
+    def chunk_xlsx(
+        self, sheets: dict[str, str], drive_file_id: str
+    ) -> list[ChunkData]:
+        """Chunk xlsx by sheet. File-level deep link only."""
+        chunks: list[ChunkData] = []
+        ordinal = 0
+
+        for sheet_name in sorted(sheets.keys()):
+            sheet_chunks = self._chunk_text(
+                sheets[sheet_name],
+                primary_unit_type="xlsx_sheet",
+                primary_unit_value=sheet_name,
+                anchor_id=None,
+                deep_link=f"https://drive.google.com/file/d/{drive_file_id}/view",
+                start_ordinal=ordinal,
+            )
+            chunks.extend(sheet_chunks)
+            ordinal += len(sheet_chunks)
+
+        return chunks
+
     @staticmethod
     def _hash_text(text: str) -> str:
         normalized = re.sub(r"\s+", " ", text.strip())

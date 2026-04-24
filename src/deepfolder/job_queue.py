@@ -1,31 +1,36 @@
-from datetime import datetime, timezone, timedelta
-from typing import Any, Callable
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
+from typing import Any
 
 from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from googleapiclient.http import MediaIoBaseDownload
-from googleapiclient.discovery import build
 
 from deepfolder.auth.token_vault import TokenVault
+from deepfolder.chunker import Chunker
 from deepfolder.config import settings
 from deepfolder.drive_client import DriveClient
 from deepfolder.embedding_client import EmbeddingClient
-from deepfolder.models.folder import Folder
-from deepfolder.models.file import File
-from deepfolder.models.skipped_file import SkippedFile
-from deepfolder.models.job import Job
-from deepfolder.models.user import User
-from deepfolder.models.chunk import Chunk
 from deepfolder.extractors import (
-    PDFExtractor,
+    DocxExtractor,
     GoogleDocsExtractor,
-    GoogleSlidesExtractor,
     GoogleSheetsExtractor,
+    GoogleSlidesExtractor,
+    PDFExtractor,
+    PptxExtractor,
+    XlsxExtractor,
 )
+from deepfolder.models.chunk import Chunk
+from deepfolder.models.file import File
+from deepfolder.models.folder import Folder
+from deepfolder.models.job import Job
+from deepfolder.models.skipped_file import SkippedFile
+from deepfolder.models.user import User
 from deepfolder.chunker import Chunker
-from deepfolder.usage_tracker import UsageTracker, SpendCapExceeded
+from deepfolder.usage_tracker import UsageTracker
 
 
 class JobQueue:
@@ -40,7 +45,7 @@ class JobQueue:
             select(Job)
             .where(
                 (Job.status == "pending")
-                & (Job.run_after <= datetime.now(timezone.utc))
+                & (Job.run_after <= datetime.now(UTC))
             )
             .order_by(Job.created_at)
             .limit(1)
@@ -64,7 +69,7 @@ class JobQueue:
         await session.execute(
             update(Job)
             .where(Job.id == job_id)
-            .values(status="complete", updated_at=datetime.now(timezone.utc))
+            .values(status="complete", updated_at=datetime.now(UTC))
         )
         await session.commit()
 
@@ -80,8 +85,8 @@ class JobQueue:
                 status="pending",
                 last_error=error,
                 attempts=Job.attempts + 1,
-                run_after=datetime.now(timezone.utc) + timedelta(seconds=retry_after_seconds),
-                updated_at=datetime.now(timezone.utc),
+                run_after=datetime.now(UTC) + timedelta(seconds=retry_after_seconds),
+                updated_at=datetime.now(UTC),
             )
         )
         await session.commit()
@@ -178,7 +183,7 @@ async def handle_ingest_folder(session: AsyncSession, job: Job) -> None:
                         credentials,
                         chunker,
                     )
-                    file_obj.extracted_at = datetime.now(timezone.utc)
+                    file_obj.extracted_at = datetime.now(UTC)
                     file_count += 1
                 except Exception:
                     pass
@@ -191,7 +196,7 @@ async def handle_ingest_folder(session: AsyncSession, job: Job) -> None:
         folder.file_count = file_count
         await session.commit()
 
-    except Exception as e:
+    except Exception:
         folder.state = "failed"
         folder.file_count = 0
         await session.commit()
@@ -215,6 +220,12 @@ async def _extract_and_chunk_file(
         await _extract_and_chunk_slides(session, file_obj, credentials, chunker)
     elif mime_type == "application/vnd.google-apps.spreadsheet":
         await _extract_and_chunk_sheets(session, file_obj, credentials, chunker)
+    elif mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        await _extract_and_chunk_docx(session, file_obj, drive_service, chunker)
+    elif mime_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+        await _extract_and_chunk_pptx(session, file_obj, drive_service, chunker)
+    elif mime_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+        await _extract_and_chunk_xlsx(session, file_obj, drive_service, chunker)
 
 
 async def _extract_and_chunk_pdf(
@@ -339,6 +350,111 @@ async def _extract_and_chunk_sheets(
     await session.flush()
 
 
+async def _extract_and_chunk_docx(
+    session: AsyncSession,
+    file_obj: File,
+    drive_service: Any,
+    chunker: Chunker,
+) -> None:
+    """Download and chunk docx file."""
+    request = drive_service.files().get_media(fileId=file_obj.drive_file_id)
+    fh = BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+
+    file_content = fh.getvalue()
+    sections = await DocxExtractor.extract_text(file_content)
+    chunks = chunker.chunk_docx(sections, file_obj.drive_file_id)
+
+    for chunk_data in chunks:
+        chunk = Chunk(
+            file_id=file_obj.id,
+            primary_unit_type=chunk_data.primary_unit_type,
+            primary_unit_value=chunk_data.primary_unit_value,
+            text=chunk_data.text,
+            content_hash=chunk_data.content_hash,
+            token_count=chunk_data.token_count,
+            anchor_id=chunk_data.anchor_id,
+            deep_link=chunk_data.deep_link,
+            ordinal=chunk_data.ordinal,
+        )
+        session.add(chunk)
+
+    await session.flush()
+
+
+async def _extract_and_chunk_pptx(
+    session: AsyncSession,
+    file_obj: File,
+    drive_service: Any,
+    chunker: Chunker,
+) -> None:
+    """Download and chunk pptx file."""
+    request = drive_service.files().get_media(fileId=file_obj.drive_file_id)
+    fh = BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+
+    file_content = fh.getvalue()
+    slides = await PptxExtractor.extract_text(file_content)
+    chunks = chunker.chunk_pptx(slides, file_obj.drive_file_id)
+
+    for chunk_data in chunks:
+        chunk = Chunk(
+            file_id=file_obj.id,
+            primary_unit_type=chunk_data.primary_unit_type,
+            primary_unit_value=chunk_data.primary_unit_value,
+            text=chunk_data.text,
+            content_hash=chunk_data.content_hash,
+            token_count=chunk_data.token_count,
+            anchor_id=chunk_data.anchor_id,
+            deep_link=chunk_data.deep_link,
+            ordinal=chunk_data.ordinal,
+        )
+        session.add(chunk)
+
+    await session.flush()
+
+
+async def _extract_and_chunk_xlsx(
+    session: AsyncSession,
+    file_obj: File,
+    drive_service: Any,
+    chunker: Chunker,
+) -> None:
+    """Download and chunk xlsx file."""
+    request = drive_service.files().get_media(fileId=file_obj.drive_file_id)
+    fh = BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+
+    file_content = fh.getvalue()
+    sheets = await XlsxExtractor.extract_text(file_content)
+    chunks = chunker.chunk_xlsx(sheets, file_obj.drive_file_id)
+
+    for chunk_data in chunks:
+        chunk = Chunk(
+            file_id=file_obj.id,
+            primary_unit_type=chunk_data.primary_unit_type,
+            primary_unit_value=chunk_data.primary_unit_value,
+            text=chunk_data.text,
+            content_hash=chunk_data.content_hash,
+            token_count=chunk_data.token_count,
+            anchor_id=chunk_data.anchor_id,
+            deep_link=chunk_data.deep_link,
+            ordinal=chunk_data.ordinal,
+        )
+        session.add(chunk)
+
+    await session.flush()
+
+
 @JobHandlers.register("sync_folder")
 async def handle_sync_folder(session: AsyncSession, job: Job) -> None:
     """Sync a Drive folder: diff against database, add new files, remove deleted files."""
@@ -422,7 +538,7 @@ async def handle_sync_folder(session: AsyncSession, job: Job) -> None:
         folder.file_count = new_file_count
         await session.commit()
 
-    except Exception as e:
+    except Exception:
         raise
 
 
@@ -463,10 +579,7 @@ def _get_skip_reason(mime_type: str) -> str | None:
         return "Binary/archive files not supported in v0.1"
 
     unsupported_types = {
-        "application/msword": "Microsoft Word not supported in v0.1",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "Office documents not supported in v0.1",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "Office documents not supported in v0.1",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation": "Office documents not supported in v0.1",
+        "application/msword": "Legacy Microsoft Word format not supported",
         "application/vnd.google-apps.folder": "Folders themselves are not files",
     }
 
@@ -478,6 +591,9 @@ def _get_skip_reason(mime_type: str) -> str | None:
         "application/vnd.google-apps.document",
         "application/vnd.google-apps.presentation",
         "application/vnd.google-apps.spreadsheet",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     }
 
     if mime_type not in supported_types:

@@ -27,6 +27,9 @@ dependencies = [
     "structlog>=24.0",
     "sentry-sdk[fastapi]>=2.0",
     "pgvector>=0.3.0",
+    "python-docx>=1.1.0",
+    "python-pptx>=1.0.0",
+    "openpyxl>=3.1.0",
 ]
 
 [project.optional-dependencies]
@@ -63,11 +66,20 @@ select = [
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+explicit_package_bases = true
 
 [[tool.mypy.overrides]]
 module = [
     "google.*",
     "googleapiclient.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "docx.*",
+    "pptx.*",
+    "openpyxl",
 ]
 ignore_missing_imports = true
 
