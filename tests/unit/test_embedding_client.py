@@ -1,8 +1,9 @@
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 import httpx
+import pytest
 
 from deepfolder.embedding_client import EmbeddingClient
 
@@ -64,8 +65,9 @@ async def test_embed_chunks_respects_batch_size(embedding_client: EmbeddingClien
 
     with patch.object(embedding_client, "_call_voyage_api", new_callable=AsyncMock) as mock_call:
 
-        async def mock_api(batch: list[str]) -> dict:
-            return {"data": [{"embedding": [0.1] * 1024} for _ in range(len(batch))], "usage": {"total_tokens": len(batch)}}
+        async def mock_api(batch: list[str]) -> dict[str, Any]:
+            data = [{"embedding": [0.1] * 1024} for _ in range(len(batch))]
+            return {"data": data, "usage": {"total_tokens": len(batch)}}
 
         mock_call.side_effect = mock_api
 
@@ -91,7 +93,9 @@ async def test_embed_chunks_empty_list(embedding_client: EmbeddingClient) -> Non
 async def test_embed_chunks_retry_on_429(embedding_client: EmbeddingClient) -> None:
     texts = ["Hello world"]
 
-    success_body = json.dumps({"data": [{"embedding": [0.1] * 1024}], "usage": {"total_tokens": 5}}).encode()
+    success_body = json.dumps(
+        {"data": [{"embedding": [0.1] * 1024}], "usage": {"total_tokens": 5}}
+    ).encode()
 
     call_count = 0
 
@@ -123,7 +127,9 @@ async def test_rerank_makes_correct_api_call(embedding_client: EmbeddingClient) 
         "usage": {"total_tokens": 50},
     }
 
-    with patch.object(embedding_client, "_call_voyage_rerank_api", new_callable=AsyncMock) as mock_call:
+    with patch.object(
+        embedding_client, "_call_voyage_rerank_api", new_callable=AsyncMock
+    ) as mock_call:
         mock_call.return_value = mock_response.json.return_value
 
         indices, scores, tokens = await embedding_client.rerank(
@@ -174,7 +180,6 @@ async def test_rerank_http_request_format(embedding_client: EmbeddingClient) -> 
 @pytest.mark.asyncio
 async def test_rerank_call_shape_and_batch_limit(embedding_client: EmbeddingClient) -> None:
     """Rerank sends correct input shape with ≤ 128 documents per API call."""
-    from typing import Any
     captured_kwargs: dict[str, Any] = {}
 
     async def mock_rerank_api(query: str, documents: list[str], top_k: int) -> dict[str, Any]:
