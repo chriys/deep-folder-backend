@@ -75,6 +75,40 @@ def _setup_auth(app):
     app.dependency_overrides[require_user] = _override_user
 
 
+def _make_mock_llm(router_label: str = "simple"):
+    """Create a mock LLMClient that classifies as router_label and streams a canned response."""
+    mock_llm = MagicMock()
+    mock_llm.generate = AsyncMock(return_value=(router_label, 5, 0))
+
+    async def mock_stream(system_prompt, user_prompt):
+        yield "Based on the document, the answer is X."
+
+    mock_llm.generate_stream = mock_stream
+    return mock_llm
+
+
+def _make_mock_chunk():
+    chunk = MagicMock()
+    chunk.id = 1
+    chunk.text = "test chunk text"
+    chunk.file_id = 1
+    chunk.deep_link = "https://example.com"
+    chunk.primary_unit_type = "pdf_page"
+    chunk.primary_unit_value = "1"
+    return chunk
+
+
+def _make_mock_citation():
+    return Citation(
+        chunk_id=1,
+        file_id=1,
+        file_name="test.pdf",
+        primary_unit=PrimaryUnit(type="pdf_page", value="1"),
+        quote="test chunk text",
+        deep_link="https://example.com",
+    )
+
+
 @pytest.mark.asyncio
 async def test_create_conversation_requires_auth(app):
     async with AsyncClient(
@@ -168,39 +202,19 @@ async def test_send_message_success(app):
 
     app.dependency_overrides[get_session] = _get_session
 
-    # Mock HybridSearch result
-    mock_chunk = MagicMock()
-    mock_chunk.id = 1
-    mock_chunk.text = "test chunk text"
-    mock_chunk.file_id = 1
-    mock_chunk.deep_link = "https://example.com"
-    mock_chunk.primary_unit_type = "pdf_page"
-    mock_chunk.primary_unit_value = "1"
-
-    mock_citation = Citation(
-        chunk_id=1,
-        file_id=1,
-        file_name="test.pdf",
-        primary_unit=PrimaryUnit(type="pdf_page", value="1"),
-        quote="test chunk text",
-        deep_link="https://example.com",
-    )
+    mock_chunk = _make_mock_chunk()
+    mock_citation = _make_mock_citation()
 
     mock_search_instance = MagicMock()
     mock_search_instance.retrieve = AsyncMock(
         return_value=[(mock_chunk, 0.95, mock_citation)]
     )
 
-    mock_llm_instance = MagicMock()
-
-    async def mock_stream(system_prompt, user_prompt):
-        yield "Based on the document, the answer is X."
-
-    mock_llm_instance.generate_stream = mock_stream
+    mock_llm = _make_mock_llm(router_label="simple")
 
     with (
         patch("deepfolder.api.conversations.HybridSearch", return_value=mock_search_instance),
-        patch("deepfolder.api.conversations.LLMClient", return_value=mock_llm_instance),
+        patch("deepfolder.api.conversations.LLMClient", return_value=mock_llm),
         patch("deepfolder.api.conversations.UsageTracker") as mock_tracker_cls,
     ):
         mock_tracker = AsyncMock()
@@ -245,16 +259,11 @@ async def test_send_message_empty_citations_when_no_chunks_found(app):
     mock_search_instance = MagicMock()
     mock_search_instance.retrieve = AsyncMock(return_value=[])
 
-    mock_llm_instance = MagicMock()
-
-    async def mock_stream(system_prompt, user_prompt):
-        yield "I could not find information about that in the documents."
-
-    mock_llm_instance.generate_stream = mock_stream
+    mock_llm = _make_mock_llm(router_label="simple")
 
     with (
         patch("deepfolder.api.conversations.HybridSearch", return_value=mock_search_instance),
-        patch("deepfolder.api.conversations.LLMClient", return_value=mock_llm_instance),
+        patch("deepfolder.api.conversations.LLMClient", return_value=mock_llm),
         patch("deepfolder.api.conversations.UsageTracker") as mock_tracker_cls,
     ):
         mock_tracker = AsyncMock()
@@ -305,3 +314,83 @@ async def test_send_message_returns_429_when_spend_cap_exceeded(app):
     assert response.status_code == 429
     data = response.json()
     assert "Cap exceeded" in data["detail"]
+
+
+@pytest.mark.asyncio
+async def test_send_message_complex_returns_501(app):
+    _setup_auth(app)
+
+    mock_conv = MagicMock()
+    mock_conv.id = 1
+    mock_conv.folder_id = 1
+    mock_conv.user_id = 1
+
+    session = _override_session(return_conversation=mock_conv)
+
+    async def _get_session():
+        yield session
+
+    app.dependency_overrides[get_session] = _get_session
+
+    mock_llm = _make_mock_llm(router_label="complex")
+
+    with (
+        patch("deepfolder.api.conversations.LLMClient", return_value=mock_llm),
+        patch("deepfolder.api.conversations.UsageTracker") as mock_tracker_cls,
+    ):
+        mock_tracker = AsyncMock()
+        mock_tracker_cls.return_value = mock_tracker
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                f"/conversations/{mock_conv.id}/messages",
+                json={"content": "Compare the documents"},
+            )
+
+    assert response.status_code == 501
+    events = _parse_sse(response.text)
+    assert len(events) == 1
+    assert events[0]["event"] == "error"
+    assert events[0]["data"]["code"] == "not_implemented"
+    assert "complex" in events[0]["data"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_send_message_task_returns_501(app):
+    _setup_auth(app)
+
+    mock_conv = MagicMock()
+    mock_conv.id = 1
+    mock_conv.folder_id = 1
+    mock_conv.user_id = 1
+
+    session = _override_session(return_conversation=mock_conv)
+
+    async def _get_session():
+        yield session
+
+    app.dependency_overrides[get_session] = _get_session
+
+    mock_llm = _make_mock_llm(router_label="task")
+
+    with (
+        patch("deepfolder.api.conversations.LLMClient", return_value=mock_llm),
+        patch("deepfolder.api.conversations.UsageTracker") as mock_tracker_cls,
+    ):
+        mock_tracker = AsyncMock()
+        mock_tracker_cls.return_value = mock_tracker
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                f"/conversations/{mock_conv.id}/messages",
+                json={"content": "Extract action items"},
+            )
+
+    assert response.status_code == 501
+    events = _parse_sse(response.text)
+    assert len(events) == 1
+    assert events[0]["event"] == "error"
+    assert events[0]["data"]["code"] == "not_implemented"
+    assert "task" in events[0]["data"]["message"]
