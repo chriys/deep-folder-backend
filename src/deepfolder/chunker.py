@@ -45,6 +45,52 @@ class Chunker:
 
         return chunks
 
+    def chunk_slides(
+        self, slides: dict[str, str], drive_file_id: str
+    ) -> list[ChunkData]:
+        """Chunk Google Slides content, one entry per slide keyed by objectId."""
+        chunks: list[ChunkData] = []
+        ordinal = 0
+        slides_list = list(slides.items())
+        for slide_num, (object_id, text) in enumerate(slides_list, 1):
+            slide_chunks = self._chunk_text(
+                text,
+                primary_unit_type="slide",
+                primary_unit_value=str(slide_num),
+                anchor_id=object_id,
+                deep_link=f"https://docs.google.com/presentation/d/{drive_file_id}/edit#slide=id.{object_id}",
+                start_ordinal=ordinal,
+            )
+            chunks.extend(slide_chunks)
+            ordinal += len(slide_chunks)
+        return chunks
+
+    def chunk_sheets(
+        self, sheets: list[dict[str, str]], drive_file_id: str
+    ) -> list[ChunkData]:
+        """Chunk Google Sheets content, one entry per sheet.
+        sheets: list of {name, gid, text, row_range} dicts
+        """
+        chunks: list[ChunkData] = []
+        ordinal = 0
+        for sheet_data in sheets:
+            name = sheet_data["name"]
+            gid = sheet_data["gid"]
+            text = sheet_data["text"]
+            row_range = sheet_data["row_range"]
+
+            sheet_chunks = self._chunk_text(
+                text,
+                primary_unit_type="sheet_range",
+                primary_unit_value=f"{name} ({row_range})",
+                anchor_id=gid,
+                deep_link=f"https://docs.google.com/spreadsheets/d/{drive_file_id}/edit#gid={gid}&range={row_range}",
+                start_ordinal=ordinal,
+            )
+            chunks.extend(sheet_chunks)
+            ordinal += len(sheet_chunks)
+        return chunks
+
     def chunk_docs(
         self, content: str, headings: list[dict[str, str]], drive_file_id: str
     ) -> list[ChunkData]:

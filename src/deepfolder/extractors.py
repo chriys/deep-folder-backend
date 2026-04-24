@@ -28,6 +28,89 @@ class PDFExtractor:
         return await asyncio.to_thread(_extract)
 
 
+class GoogleSlidesExtractor:
+    @staticmethod
+    async def extract_slides(
+        file_id: str, credentials: Credentials
+    ) -> dict[str, str]:
+        """Extract text from Google Slides, keyed by objectId."""
+        service = build("slides", "v1", credentials=credentials)
+
+        def _extract() -> dict[str, str]:
+            presentation = service.presentations().get(presentationId=file_id).execute()
+            slides_dict: dict[str, str] = {}
+            for slide in presentation.get("slides", []):
+                object_id = slide.get("objectId", "")
+                text_parts: list[str] = []
+                for element in slide.get("pageElements", []):
+                    if "shape" in element:
+                        shape = element["shape"]
+                        if "text" in shape:
+                            for text_element in shape["text"].get("textElements", []):
+                                if "textRun" in text_element:
+                                    text_parts.append(text_element["textRun"]["content"])
+                slides_dict[object_id] = "".join(text_parts).strip()
+            return slides_dict
+
+        return await asyncio.to_thread(_extract)
+
+
+class GoogleSheetsExtractor:
+    @staticmethod
+    async def extract_sheets(
+        file_id: str, credentials: Credentials
+    ) -> list[dict[str, str]]:
+        """Extract text from Google Sheets, one entry per sheet.
+        Returns list of {name, gid, text, row_range} dicts.
+        """
+        service = build("sheets", "v4", credentials=credentials)
+
+        def _extract() -> list[dict[str, str]]:
+            spreadsheet = service.spreadsheets().get(spreadsheetId=file_id).execute()
+            sheets_data: list[dict[str, str]] = []
+            for sheet in spreadsheet.get("sheets", []):
+                props = sheet.get("properties", {})
+                sheet_title = props.get("title", "Sheet1")
+                sheet_id = props.get("sheetId", 0)
+                grid = props.get("gridProperties", {})
+                row_count = grid.get("rowCount", 0)
+                col_count = grid.get("columnCount", 0)
+
+                if row_count == 0 or col_count == 0:
+                    continue
+
+                last_col = _column_letter(col_count)
+                range_name = f"{sheet_title}!A1:{last_col}{row_count}"
+
+                result = service.spreadsheets().values().get(
+                    spreadsheetId=file_id, range=range_name
+                ).execute()
+
+                values = result.get("values", [])
+                text_lines = ["\t".join(str(c) for c in row) for row in values]
+                full_text = "\n".join(text_lines)
+
+                sheets_data.append({
+                    "name": sheet_title,
+                    "gid": str(sheet_id),
+                    "text": full_text,
+                    "row_range": f"A1:{last_col}{row_count}",
+                })
+            return sheets_data
+
+        return await asyncio.to_thread(_extract)
+
+
+def _column_letter(n: int) -> str:
+    """Convert 1-based column index to spreadsheet column letter (1=A, 26=Z, 27=AA)."""
+    result = ""
+    while n > 0:
+        n -= 1
+        result = chr(ord("A") + n % 26) + result
+        n //= 26
+    return result
+
+
 class GoogleDocsExtractor:
     @staticmethod
     async def extract_text(
