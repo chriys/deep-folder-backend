@@ -20,7 +20,12 @@ from deepfolder.models.user import User
 
 router = APIRouter(prefix="/auth")
 
-SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+SCOPES = [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive.activity.readonly",
+]
 GOOGLE_TOKEN_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 PKCE_COOKIE_NAME = "pkce_verifier"
 PKCE_MAX_AGE = 300  # 5 minutes
