@@ -56,6 +56,9 @@ class UsageTracker:
         elif kind == "embedding":
             input_price = prices.get("input_per_1m", 0.0)
             cost = (input_tokens / 1_000_000) * input_price
+        elif kind == "rerank":
+            input_price = prices.get("input_per_1m", 0.0)
+            cost = (input_tokens / 1_000_000) * input_price
         else:
             cost = 0.0
         return round(cost, 6)

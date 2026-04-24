@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any
 
 from sqlalchemy import Float, and_, cast, func, select, text
@@ -10,6 +11,10 @@ from deepfolder.embedding_client import EmbeddingClient
 from deepfolder.models.chunk import Chunk
 from deepfolder.models.file import File
 
+TOP_K_LEG = 25
+RRF_K = 60
+RERANK_DEPTH = 50
+
 
 class HybridSearch:
     def __init__(self) -> None:
@@ -18,26 +23,66 @@ class HybridSearch:
     async def retrieve(
         self, session: AsyncSession, folder_id: int, query: str, k: int = 10
     ) -> list[tuple[Chunk, float, Citation]]:
-        """Vector-only top-K retrieval for v0.1.
-
-        Args:
-            session: Database session
-            folder_id: Folder ID to search within
-            query: Query text to embed and search
-            k: Number of results to return
-
-        Returns:
-            List of (Chunk, similarity_score, Citation) tuples
-        """
+        """Hybrid retrieval: vector + BM25 in parallel, RRF fusion, Voyage reranker."""
         query_embedding = await self._embed_query(query)
-        chunks_with_files = await self._search_vectors(session, folder_id, query_embedding, k)
 
-        results = []
-        for chunk, score, file in chunks_with_files[:k]:
-            citation = CitationBuilder.build(chunk, file.name)
+        vec_results, bm25_results = await asyncio.gather(
+            self._search_vectors(session, folder_id, query_embedding, TOP_K_LEG),
+            self._bm25_search(session, folder_id, query, TOP_K_LEG),
+        )
+
+        chunks_map: dict[int, Chunk] = {}
+        files_map: dict[int, File] = {}
+        for c, _s, f in vec_results:
+            chunks_map[c.id] = c
+            files_map[c.id] = f
+        for c, _s, f in bm25_results:
+            chunks_map[c.id] = c
+            files_map.setdefault(c.id, f)
+
+        fused = self._rrf_fuse(
+            [c.id for c, _s, _f in vec_results],
+            [c.id for c, _s, _f in bm25_results],
+        )
+
+        top_fused = fused[:RERANK_DEPTH]
+        if top_fused:
+            chunk_texts = [chunks_map[cid].text for cid, _rrf_score in top_fused]
+            indices, scores, _ = await self._rerank(query, chunk_texts, k)
+            reranked = [(top_fused[i][0], scores[j]) for j, i in enumerate(indices)]
+        else:
+            reranked = []
+
+        results: list[tuple[Chunk, float, Citation]] = []
+        for chunk_id, score in reranked:
+            chunk = chunks_map[chunk_id]
+            citation = CitationBuilder.build(chunk, files_map[chunk_id].name)
             results.append((chunk, score, citation))
 
         return results
+
+    async def _rerank(
+        self, query: str, documents: list[str], top_k: int
+    ) -> tuple[list[int], list[float], int]:
+        return await self.embedding_client.rerank(query, documents, top_k)
+
+    @staticmethod
+    def _rrf_fuse(
+        vector_ids: list[int],
+        bm25_ids: list[int],
+        k: int = RRF_K,
+    ) -> list[tuple[int, float]]:
+        """Fuse two ranked chunk-id lists via Reciprocal Rank Fusion.
+
+        Returns list of (chunk_id, rrf_score) sorted by score descending,
+        with chunk_id as tiebreaker for determinism.
+        """
+        scores: dict[int, float] = {}
+        for rank, cid in enumerate(vector_ids, start=1):
+            scores[cid] = 1.0 / (k + rank)
+        for rank, cid in enumerate(bm25_ids, start=1):
+            scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank)
+        return sorted(scores.items(), key=lambda x: (-x[1], x[0]))
 
     async def _embed_query(self, query: str) -> list[float]:
         """Embed the query text."""

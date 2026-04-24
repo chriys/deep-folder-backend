@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     voyage_api_key: str = ""
     embedding_model: str = "voyage-4"
     embedding_dimension: int = 1024
+    reranker_model: str = "voyage-3-rerank"
 
     llm_api_key: str = ""
     llm_base_url: str = "https://api.deepseek.com/v1"
@@ -35,6 +36,7 @@ class Settings(BaseSettings):
 MODEL_PRICES: dict[str, dict[str, float]] = {
     "deepseek-chat": {"input_per_1m": 2.00, "output_per_1m": 8.00},
     "voyage-4": {"input_per_1m": 0.10, "output_per_1m": 0.00},
+    "voyage-3-rerank": {"input_per_1m": 1.00, "output_per_1m": 0.00},
 }
 
 settings = Settings()
