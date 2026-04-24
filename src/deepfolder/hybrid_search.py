@@ -1,15 +1,14 @@
 from typing import Any
 
-from sqlalchemy import select, and_, text, cast, Float
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import Float, and_, cast, func, select, text
 from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.engine import Row
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from deepfolder.citation_builder import Citation, CitationBuilder
+from deepfolder.config import settings
 from deepfolder.embedding_client import EmbeddingClient
 from deepfolder.models.chunk import Chunk
 from deepfolder.models.file import File
-from deepfolder.citation_builder import Citation, CitationBuilder
-from deepfolder.config import settings
 
 
 class HybridSearch:
@@ -69,6 +68,35 @@ class HybridSearch:
                 )
             )
             .order_by(text("similarity DESC"))
+            .limit(k)
+        )
+
+        chunks_with_files: list[tuple[Chunk, float, File]] = result.all()
+        return chunks_with_files
+
+    async def _bm25_search(
+        self, session: AsyncSession, folder_id: int, query: str, k: int
+    ) -> list[tuple[Chunk, float, File]]:
+        """BM25 keyword search using PostgreSQL full-text search (ts_rank_cd).
+
+        Returns tuples of (Chunk, ts_rank_cd_score, File).
+        """
+        ts_query = func.plainto_tsquery("english", query)
+
+        result: Any = await session.execute(
+            select(
+                Chunk,
+                func.ts_rank_cd(Chunk.search_vector, ts_query).label("rank"),
+                File,
+            )
+            .join(File, Chunk.file_id == File.id)
+            .where(
+                and_(
+                    File.folder_id == folder_id,
+                    Chunk.search_vector.op("@@")(ts_query),
+                )
+            )
+            .order_by(text("rank DESC"))
             .limit(k)
         )
 
