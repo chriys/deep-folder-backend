@@ -14,6 +14,7 @@ from deepfolder.llm_client import LLMClient
 from deepfolder.models.conversation import Conversation, Message
 from deepfolder.models.folder import Folder
 from deepfolder.models.user import User
+from deepfolder.query_router import QueryRouter
 from deepfolder.usage_tracker import UsageTracker, SpendCapExceeded
 
 router = APIRouter(prefix="/conversations")
@@ -36,6 +37,7 @@ class MessageResponse(BaseModel):
     role: str
     content: str
     citations: dict | None
+    router_label: str | None
     created_at: str
 
     class Config:
@@ -57,6 +59,14 @@ class ConversationResponse(BaseModel):
 
 class SendMessageRequest(BaseModel):
     content: str
+
+
+def _make_llm() -> LLMClient:
+    return LLMClient(
+        api_key=settings.llm_api_key,
+        base_url=settings.llm_base_url,
+        model=settings.llm_model,
+    )
 
 
 @router.post("", status_code=201, response_model=ConversationResponse)
@@ -122,6 +132,7 @@ async def list_conversations(
                     role=msg.role,
                     content=msg.content,
                     citations=msg.citations,
+                    router_label=msg.router_label,
                     created_at=msg.created_at.isoformat(),
                 )
                 for msg in sorted(conv.messages, key=lambda m: m.created_at)
@@ -159,6 +170,7 @@ async def get_conversation(
                 role=msg.role,
                 content=msg.content,
                 citations=msg.citations,
+                router_label=msg.router_label,
                 created_at=msg.created_at.isoformat(),
             )
             for msg in sorted(conversation.messages, key=lambda m: m.created_at)
@@ -205,7 +217,6 @@ async def send_message(
     except SpendCapExceeded as e:
         raise HTTPException(status_code=429, detail=str(e))
 
-    # Persist user message
     user_msg = Message(
         conversation_id=id,
         role="user",
@@ -213,11 +224,35 @@ async def send_message(
     )
     db.add(user_msg)
 
-    # Retrieve top-K chunks from the bound folder
-    search = HybridSearch()
-    results = await search.retrieve(db, conversation.folder_id, payload.content, k=10)
+    # Classify query
+    llm = _make_llm()
+    router = QueryRouter(llm)
+    label = await router.classify(payload.content)
+    user_msg.router_label = label
 
-    # Build context string and citations
+    if label == "simple":
+        return await _handle_simple(
+            db, id, conversation.folder_id, payload.content, llm, tracker
+        )
+
+    if label == "complex":
+        return _handle_not_supported("complex")
+
+    return _handle_not_supported("task")
+
+
+async def _handle_simple(
+    db: AsyncSession,
+    conversation_id: int,
+    folder_id: int,
+    query: str,
+    llm: LLMClient,
+    tracker: UsageTracker,
+) -> StreamingResponse:
+    """Simple path: retrieve top-K chunks, answer with nano LLM, stream via SSE."""
+    search = HybridSearch()
+    results = await search.retrieve(db, folder_id, query, k=10)
+
     context_parts = []
     citations = []
     for chunk, score, citation in results:
@@ -226,12 +261,6 @@ async def send_message(
 
     context_text = "\n\n".join(context_parts)
 
-    # Call LLM with context
-    llm = LLMClient(
-        api_key=settings.llm_api_key,
-        base_url=settings.llm_base_url,
-        model=settings.llm_model,
-    )
     system_prompt = (
         "You are a helpful assistant that answers questions based on the provided document context.\n"
         "Each piece of context is tagged with a [citation:X] marker where X is the chunk ID.\n"
@@ -239,23 +268,20 @@ async def send_message(
         "Only use the provided context to answer. If the context does not contain enough information, say so.\n"
         "Never fabricate citations or use citation markers not present in the context."
     )
-    user_prompt = f"Context:\n{context_text}\n\nQuestion: {payload.content}"
+    user_prompt = f"Context:\n{context_text}\n\nQuestion: {query}"
 
     async def event_stream():
         full_content = ""
         try:
-            # Emit citation events before streaming (so clients render references first)
             for c in citations:
                 yield f"event: citation\ndata: {json.dumps({'citation': c})}\n\n"
 
-            # Stream LLM response token by token
             async for delta in llm.generate_stream(system_prompt, user_prompt):
                 full_content += delta
                 yield f"event: text_delta\ndata: {json.dumps({'delta': delta})}\n\n"
 
-            # Persist assistant message with full content and citations
             assistant_msg = Message(
-                conversation_id=id,
+                conversation_id=conversation_id,
                 role="assistant",
                 content=full_content,
                 citations=citations,
@@ -264,14 +290,25 @@ async def send_message(
             await db.commit()
             await db.refresh(assistant_msg)
 
-            # Record approximate token usage (streaming API does not expose exact counts)
             input_tokens = len(system_prompt + user_prompt) // 4
             output_tokens = len(full_content) // 4
             await tracker.record("llm", settings.llm_model, input_tokens, output_tokens)
 
-            # Terminal success event
             yield f"event: done\ndata: {json.dumps({'message_id': assistant_msg.id})}\n\n"
         except Exception:
-            yield f"event: error\ndata: {json.dumps({'code': 'internal_error', 'message': 'Failed to generate response'})}\n\n"
+            yield (
+                f"event: error\ndata: {json.dumps({'code': 'internal_error', 'message': 'Failed to generate response'})}\n\n"
+            )
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+def _handle_not_supported(mode: str) -> StreamingResponse:
+    """Return a 501 SSE error stream for complex/task modes."""
+
+    async def event_stream():
+        yield (
+            f"event: error\ndata: {json.dumps({'code': 'not_implemented', 'message': f'{mode} mode not yet supported'})}\n\n"
+        )
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream", status_code=501)
