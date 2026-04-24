@@ -1,3 +1,5 @@
+import os
+import shutil
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -8,6 +10,17 @@ from deepfolder.citation_builder import Citation
 from deepfolder.hybrid_search import HybridSearch
 from deepfolder.models.chunk import Chunk
 from deepfolder.models.file import File
+
+
+def _pg_ctl_exists() -> bool:
+    """Return True when a pg_ctl binary is available on this host."""
+    return (
+        shutil.which("pg_ctl") is not None
+        or os.path.exists("/usr/lib/postgresql/15/bin/pg_ctl")
+        or os.path.exists("/usr/lib/postgresql/13/bin/pg_ctl")
+        or os.path.exists("/usr/lib/postgresql/14/bin/pg_ctl")
+        or os.path.exists("/usr/lib/postgresql/16/bin/pg_ctl")
+    )
 
 
 def _default_mock_chunk(chunk_id: int = 1, ordinal: int = 0) -> MagicMock:
@@ -39,8 +52,9 @@ async def test_retrieve_returns_tuples() -> None:
     mock_chunk = _default_mock_chunk()
 
     with pytest.MonkeyPatch.context() as m:
+        vec_result = [(mock_chunk, 0.95, mock_file)]
         m.setattr(search, "_embed_query", AsyncMock(return_value=[0.1] * 1024))
-        m.setattr(search, "_search_vectors", AsyncMock(return_value=[(mock_chunk, 0.95, mock_file)]))
+        m.setattr(search, "_search_vectors", AsyncMock(return_value=vec_result))
         m.setattr(search, "_bm25_search", AsyncMock(return_value=[]))
         m.setattr(search, "_rerank", AsyncMock(return_value=([0], [0.98], 10)))
 
@@ -162,8 +176,14 @@ async def test_retrieve_runs_both_legs_in_parallel() -> None:
 
     mock_file = _default_mock_file()
 
-    vec_chunks = [(MagicMock(spec=Chunk, id=i, text=f"vec {i}", file_id=1), 0.9, mock_file) for i in range(3)]
-    bm25_chunks = [(MagicMock(spec=Chunk, id=i, text=f"bm25 {i}", file_id=1), 0.8, mock_file) for i in range(3, 6)]
+    vec_chunks = [
+        (MagicMock(spec=Chunk, id=i, text=f"vec {i}", file_id=1), 0.9, mock_file)
+        for i in range(3)
+    ]
+    bm25_chunks = [
+        (MagicMock(spec=Chunk, id=i, text=f"bm25 {i}", file_id=1), 0.8, mock_file)
+        for i in range(3, 6)
+    ]
 
     with pytest.MonkeyPatch.context() as m:
         m.setattr(search, "_embed_query", AsyncMock(return_value=[0.1] * 1024))
@@ -176,6 +196,7 @@ async def test_retrieve_runs_both_legs_in_parallel() -> None:
         assert len(results) == 3
 
 
+@pytest.mark.skipif(not _pg_ctl_exists(), reason="PostgreSQL server (pg_ctl) not available")
 @pytest.mark.asyncio
 async def test_bm25_search_rank_order(
     postgres_db: str,

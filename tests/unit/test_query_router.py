@@ -6,7 +6,7 @@ from deepfolder.query_router import QueryRouter
 
 
 @pytest.mark.asyncio
-async def test_classify_returns_simple():
+async def test_classify_returns_simple() -> None:
     llm = MagicMock()
     llm.generate = AsyncMock(return_value=("simple", 5, 0))
     router = QueryRouter(llm)
@@ -15,7 +15,7 @@ async def test_classify_returns_simple():
 
 
 @pytest.mark.asyncio
-async def test_classify_returns_complex():
+async def test_classify_returns_complex() -> None:
     llm = MagicMock()
     llm.generate = AsyncMock(return_value=("complex", 5, 0))
     router = QueryRouter(llm)
@@ -24,7 +24,7 @@ async def test_classify_returns_complex():
 
 
 @pytest.mark.asyncio
-async def test_classify_returns_task():
+async def test_classify_returns_task() -> None:
     llm = MagicMock()
     llm.generate = AsyncMock(return_value=("task", 5, 0))
     router = QueryRouter(llm)
@@ -33,7 +33,7 @@ async def test_classify_returns_task():
 
 
 @pytest.mark.asyncio
-async def test_classify_fallback_to_simple_on_unknown():
+async def test_classify_fallback_to_simple_on_unknown() -> None:
     llm = MagicMock()
     llm.generate = AsyncMock(return_value=("unknown_response", 5, 0))
     router = QueryRouter(llm)
@@ -42,7 +42,7 @@ async def test_classify_fallback_to_simple_on_unknown():
 
 
 @pytest.mark.asyncio
-async def test_classify_case_insensitive():
+async def test_classify_case_insensitive() -> None:
     llm = MagicMock()
     llm.generate = AsyncMock(return_value=("Complex", 5, 0))
     router = QueryRouter(llm)
@@ -51,7 +51,7 @@ async def test_classify_case_insensitive():
 
 
 @pytest.mark.asyncio
-async def test_classify_strips_whitespace():
+async def test_classify_strips_whitespace() -> None:
     llm = MagicMock()
     llm.generate = AsyncMock(return_value=("  simple  ", 5, 0))
     router = QueryRouter(llm)
@@ -60,7 +60,7 @@ async def test_classify_strips_whitespace():
 
 
 @pytest.mark.asyncio
-async def test_classify_calls_llm_with_system_prompt():
+async def test_classify_calls_llm_with_system_prompt() -> None:
     llm = MagicMock()
     llm.generate = AsyncMock(return_value=("simple", 10, 0))
     router = QueryRouter(llm)
@@ -96,7 +96,7 @@ FIXTURE_QUERIES: list[tuple[str, str]] = [
 
 
 @pytest.mark.asyncio
-async def test_labeled_fixture_set():
+async def test_labeled_fixture_set() -> None:
     """Verify QueryRouter correctly classifies the labeled fixture set (>=80% accuracy)."""
     llm = MagicMock()
 
