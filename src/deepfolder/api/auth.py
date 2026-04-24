@@ -134,7 +134,7 @@ async def auth_callback(
     await db.commit()
 
     session_mgr = SessionManager(settings.secret_key)
-    response = RedirectResponse(url="/", status_code=302)
+    response = RedirectResponse(url=settings.frontend_url, status_code=302)
     session_mgr.set_session(response, email)
     response.delete_cookie(PKCE_COOKIE_NAME)
     return response

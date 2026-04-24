@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8000/auth/google/callback"
+    frontend_url: str = "http://localhost:5173"
+    cors_origins: list[str] = ["http://localhost:5173"]
 
     voyage_api_key: str = ""
     embedding_model: str = "voyage-4"
