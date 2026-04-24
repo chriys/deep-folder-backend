@@ -31,6 +31,7 @@ from deepfolder.models.conversation import Conversation, Message
 from deepfolder.models.file import File
 from deepfolder.models.folder import Folder
 from deepfolder.models.job import Job
+from deepfolder.models.trace import Trace
 from deepfolder.models.user import User
 from deepfolder.citation_builder import CitationBuilder
 
@@ -273,3 +274,116 @@ async def test_google_folder_fixture_end_to_end(async_session: AsyncSession):
     assert persisted.role == "assistant"
     assert persisted.citations is not None
     assert len(persisted.citations) > 0
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_traces_and_citations(async_session: AsyncSession):
+    """Full agent loop: traces rows written, citations carry valid file_id and deep_link."""
+    folder_id = os.environ["TEST_FOLDER_ID"]
+    refresh_token = os.environ["TEST_REFRESH_TOKEN"]
+
+    vault = TokenVault(settings.secret_key)
+    encrypted_token = vault.encrypt(refresh_token)
+
+    user = User(email="integration-test@deepfolder.dev", encrypted_refresh_token=encrypted_token)
+    async_session.add(user)
+    await async_session.flush()
+    user_id = user.id
+
+    folder = Folder(
+        user_id=user_id,
+        drive_folder_id=folder_id,
+        name="Integration Test Fixture",
+        state="pending",
+    )
+    async_session.add(folder)
+    await async_session.flush()
+    folder_pk = folder.id
+
+    job = Job(
+        job_type="ingest_folder",
+        status="pending",
+        payload=json.dumps({"folder_id": folder_pk}),
+        user_id=user_id,
+    )
+    async_session.add(job)
+    await async_session.commit()
+
+    dequeued = await JobQueue.dequeue_job(async_session)
+    assert dequeued is not None
+    await JobQueue.mark_in_progress(async_session, dequeued.id)
+    await JobHandlers.execute(async_session, dequeued)
+    await JobQueue.mark_complete(async_session, dequeued.id)
+
+    # Create conversation and send a complex query
+    conversation = Conversation(user_id=user_id, folder_id=folder_pk, title="Agent Loop Test")
+    async_session.add(conversation)
+    await async_session.commit()
+    await async_session.refresh(conversation)
+
+    app = create_app()
+
+    async def _override_session():
+        yield async_session
+
+    async def _override_user():
+        return user
+
+    app.dependency_overrides[get_session] = _override_session
+    app.dependency_overrides[require_user] = _override_user
+
+    # Use a complex query that requires the orchestrator
+    question = "Compare the Q3 and Q4 revenue figures and identify key differences"
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/conversations/{conversation.id}/messages",
+            json={"content": question},
+        )
+
+    assert response.status_code == 200
+
+    events = _parse_sse(response.text)
+    assert len(events) >= 1
+
+    # Assert SSE stream contains text_delta, citation, and done events
+    text_events = [e for e in events if e["event"] == "text_delta"]
+    citation_events = [e for e in events if e["event"] == "citation"]
+    done_events = [e for e in events if e["event"] == "done"]
+
+    assert len(text_events) > 0, "No text_delta events in SSE stream"
+    assert len(citation_events) > 0, "No citation events in SSE stream"
+    assert len(done_events) == 1, f"Expected 1 done event, got {len(done_events)}"
+
+    # Assert citations carry valid file_id and deep_link
+    for ce in citation_events:
+        c = ce["data"]["citation"]
+        assert "file_id" in c, "Citation missing file_id"
+        assert "deep_link" in c, "Citation missing deep_link"
+        assert isinstance(c["file_id"], int), \
+            f"file_id should be int, got {type(c['file_id'])}"
+        is_valid = (
+            c["deep_link"].startswith("https://drive.google.com/")
+            or c["deep_link"].startswith("https://docs.google.com/")
+        )
+        assert is_valid, f"Invalid citation deep_link: {c['deep_link']!r}"
+
+    # Assert traces rows written for orchestrator_call and tool_call events
+    result = await async_session.execute(
+        select(Trace).where(Trace.conversation_id == conversation.id)
+    )
+    traces = result.scalars().all()
+    assert len(traces) >= 1, "No traces rows written during agent loop"
+
+    event_types = {t.event_type for t in traces}
+    assert "orchestrator_call" in event_types, "Missing orchestrator_call trace"
+    assert "tool_call" in event_types, "Missing tool_call trace"
+
+    # Verify tool traces have input/output
+    tool_traces = [t for t in traces if t.event_type == "tool_call"]
+    for tt in tool_traces:
+        assert tt.tool_name is not None, "Tool trace missing tool_name"
+        assert tt.input is not None, "Tool trace missing input"
+        assert tt.latency_ms is not None, "Tool trace missing latency_ms"

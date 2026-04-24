@@ -169,3 +169,46 @@ async def test_rerank_http_request_format(embedding_client: EmbeddingClient) -> 
     assert indices == [0]
     assert scores[0] == 0.99
     assert tokens == 10
+
+
+@pytest.mark.asyncio
+async def test_rerank_call_shape_and_batch_limit(embedding_client: EmbeddingClient) -> None:
+    """Rerank sends correct input shape with ≤ 128 documents per API call."""
+    from typing import Any
+    captured_kwargs: dict[str, Any] = {}
+
+    async def mock_rerank_api(query: str, documents: list[str], top_k: int) -> dict[str, Any]:
+        captured_kwargs["query"] = query
+        captured_kwargs["documents"] = documents
+        captured_kwargs["top_k"] = top_k
+        return {
+            "results": [
+                {"index": i, "relevance_score": 1.0 - i * 0.01, "document": documents[i]}
+                for i in range(min(top_k, len(documents)))
+            ],
+            "usage": {"total_tokens": 50},
+        }
+
+    # Test with exactly 128 documents (the batch limit)
+    docs_128 = [f"doc_{i}" for i in range(128)]
+    with patch.object(embedding_client, "_call_voyage_rerank_api", new=mock_rerank_api):
+        indices, scores, tokens = await embedding_client.rerank(
+            query="test query", documents=docs_128, top_k=10,
+        )
+
+    assert captured_kwargs["query"] == "test query"
+    assert len(captured_kwargs["documents"]) == 128
+    assert captured_kwargs["top_k"] == 10
+    assert len(indices) == 10  # top_k
+    assert tokens == 50
+
+    # Test with fewer docs
+    captured_kwargs.clear()
+    docs_small = ["doc_a", "doc_b", "doc_c"]
+    with patch.object(embedding_client, "_call_voyage_rerank_api", new=mock_rerank_api):
+        indices, scores, tokens = await embedding_client.rerank(
+            query="short query", documents=docs_small, top_k=3,
+        )
+
+    assert len(captured_kwargs["documents"]) == 3
+    assert captured_kwargs["top_k"] == 3
