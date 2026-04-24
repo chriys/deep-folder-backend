@@ -76,8 +76,10 @@ async def _get_user_email(token: str) -> str:
 
 @router.get("/google/start")
 async def auth_start(return_to: str = settings.frontend_url) -> RedirectResponse:
-    allowed = {str(o).rstrip("/") for o in settings.cors_origins}
     from urllib.parse import urlparse
+    if return_to.startswith("/"):
+        return_to = settings.frontend_url.rstrip("/") + return_to
+    allowed = {str(o).rstrip("/") for o in settings.cors_origins}
     origin = f"{urlparse(return_to).scheme}://{urlparse(return_to).netloc}"
     if origin.rstrip("/") not in allowed:
         raise HTTPException(status_code=400, detail="return_to origin not allowed")
