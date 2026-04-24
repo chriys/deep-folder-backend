@@ -1,4 +1,5 @@
 from dataclasses import asdict, dataclass
+from typing import Any
 
 from deepfolder.models.chunk import Chunk
 
@@ -18,7 +19,7 @@ class Citation:
     quote: str
     deep_link: str
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "chunk_id": self.chunk_id,
             "file_id": self.file_id,

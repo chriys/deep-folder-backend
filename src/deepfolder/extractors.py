@@ -14,7 +14,7 @@ class PDFExtractor:
         try:
             import pypdf
         except ImportError:
-            raise ImportError("pypdf is required for PDF extraction")
+            raise ImportError("pypdf is required for PDF extraction") from None
 
         def _extract() -> dict[int, str]:
             reader = pypdf.PdfReader(BytesIO(file_content))
@@ -46,7 +46,7 @@ class GoogleDocsExtractor:
                     _, done = downloader.next_chunk()
                 return fh.getvalue().decode("utf-8")
             except Exception as e:
-                raise ValueError(f"Error extracting Google Doc {file_id}: {e}")
+                raise ValueError(f"Error extracting Google Doc {file_id}: {e}") from e
 
         return await asyncio.to_thread(_extract)
 
@@ -65,7 +65,7 @@ class GoogleDocsExtractor:
                 headings = GoogleDocsExtractor._extract_headings_from_document(doc)
                 return text, headings
             except Exception as e:
-                raise ValueError(f"Error extracting Google Doc {file_id}: {e}")
+                raise ValueError(f"Error extracting Google Doc {file_id}: {e}") from e
 
         return await asyncio.to_thread(_extract)
 

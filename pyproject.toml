@@ -66,6 +66,7 @@ select = [
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+explicit_package_bases = true
 
 [[tool.mypy.overrides]]
 module = [
@@ -78,6 +79,7 @@ ignore_missing_imports = true
 module = [
     "docx.*",
     "pptx.*",
+    "openpyxl",
 ]
 ignore_missing_imports = true
 

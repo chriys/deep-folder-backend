@@ -10,7 +10,7 @@ def _make_docx(heading_texts: list[str], body_texts: list[str]) -> bytes:
     from docx import Document
 
     doc = Document()
-    for heading, body in zip(heading_texts, body_texts):
+    for heading, body in zip(heading_texts, body_texts, strict=True):
         doc.add_heading(heading, level=1)
         doc.add_paragraph(body)
     buf = BytesIO()
