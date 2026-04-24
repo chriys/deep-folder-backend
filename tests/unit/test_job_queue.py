@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
@@ -11,12 +11,13 @@ from deepfolder.services.job_queue import JobQueue
 async def test_enqueue_creates_job():
     """Test that enqueue creates a job with pending status."""
     session = AsyncMock()
-    session.flush = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock(side_effect=lambda: setattr(session.add.call_args[0][0], 'id', 1))
 
     queue = JobQueue(session)
     job_id = await queue.enqueue(kind="noop", payload={"test": True})
 
-    assert job_id is None  # Job.id is None until flushed
+    assert job_id == 1
     session.add.assert_called_once()
     session.flush.assert_called_once()
 
@@ -34,6 +35,8 @@ async def test_enqueue_creates_job():
 async def test_enqueue_with_run_after():
     """Test that enqueue respects run_after parameter."""
     session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock(side_effect=lambda: setattr(session.add.call_args[0][0], 'id', 1))
     future_time = datetime.now(timezone.utc) + timedelta(hours=1)
 
     queue = JobQueue(session)
@@ -49,7 +52,7 @@ async def test_claim_returns_pending_job():
     session = AsyncMock()
     job = Job(id=1, kind="noop", payload={}, status="pending", attempts=0)
 
-    result = AsyncMock()
+    result = MagicMock()
     result.scalar_one_or_none.return_value = job
     session.execute = AsyncMock(return_value=result)
     session.flush = AsyncMock()
@@ -67,7 +70,7 @@ async def test_claim_returns_pending_job():
 async def test_claim_returns_none_when_no_pending():
     """Test that claim returns None when no pending jobs."""
     session = AsyncMock()
-    result = AsyncMock()
+    result = MagicMock()
     result.scalar_one_or_none.return_value = None
     session.execute = AsyncMock(return_value=result)
 
@@ -129,7 +132,7 @@ async def test_mark_failed_increments_attempts():
 async def test_claim_with_for_update_skip_locked():
     """Test that claim uses SKIP LOCKED for concurrency."""
     session = AsyncMock()
-    result = AsyncMock()
+    result = MagicMock()
     result.scalar_one_or_none.return_value = None
 
     mock_stmt = AsyncMock()
