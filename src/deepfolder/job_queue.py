@@ -18,7 +18,12 @@ from deepfolder.models.skipped_file import SkippedFile
 from deepfolder.models.job import Job
 from deepfolder.models.user import User
 from deepfolder.models.chunk import Chunk
-from deepfolder.extractors import PDFExtractor, GoogleDocsExtractor
+from deepfolder.extractors import (
+    PDFExtractor,
+    GoogleDocsExtractor,
+    GoogleSlidesExtractor,
+    GoogleSheetsExtractor,
+)
 from deepfolder.chunker import Chunker
 from deepfolder.usage_tracker import UsageTracker, SpendCapExceeded
 
@@ -206,6 +211,10 @@ async def _extract_and_chunk_file(
         await _extract_and_chunk_pdf(session, file_obj, drive_service, chunker)
     elif mime_type == "application/vnd.google-apps.document":
         await _extract_and_chunk_docs(session, file_obj, credentials, chunker)
+    elif mime_type == "application/vnd.google-apps.presentation":
+        await _extract_and_chunk_slides(session, file_obj, credentials, chunker)
+    elif mime_type == "application/vnd.google-apps.spreadsheet":
+        await _extract_and_chunk_sheets(session, file_obj, credentials, chunker)
 
 
 async def _extract_and_chunk_pdf(
@@ -254,6 +263,64 @@ async def _extract_and_chunk_docs(
         file_obj.drive_file_id, credentials
     )
     chunks = chunker.chunk_docs(text, headings, file_obj.drive_file_id)
+
+    for chunk_data in chunks:
+        chunk = Chunk(
+            file_id=file_obj.id,
+            primary_unit_type=chunk_data.primary_unit_type,
+            primary_unit_value=chunk_data.primary_unit_value,
+            text=chunk_data.text,
+            content_hash=chunk_data.content_hash,
+            token_count=chunk_data.token_count,
+            anchor_id=chunk_data.anchor_id,
+            deep_link=chunk_data.deep_link,
+            ordinal=chunk_data.ordinal,
+        )
+        session.add(chunk)
+
+    await session.flush()
+
+
+async def _extract_and_chunk_slides(
+    session: AsyncSession,
+    file_obj: File,
+    credentials: Credentials,
+    chunker: Chunker,
+) -> None:
+    """Extract and chunk Google Slides file."""
+    slides = await GoogleSlidesExtractor.extract_slides(
+        file_obj.drive_file_id, credentials
+    )
+    chunks = chunker.chunk_slides(slides, file_obj.drive_file_id)
+
+    for chunk_data in chunks:
+        chunk = Chunk(
+            file_id=file_obj.id,
+            primary_unit_type=chunk_data.primary_unit_type,
+            primary_unit_value=chunk_data.primary_unit_value,
+            text=chunk_data.text,
+            content_hash=chunk_data.content_hash,
+            token_count=chunk_data.token_count,
+            anchor_id=chunk_data.anchor_id,
+            deep_link=chunk_data.deep_link,
+            ordinal=chunk_data.ordinal,
+        )
+        session.add(chunk)
+
+    await session.flush()
+
+
+async def _extract_and_chunk_sheets(
+    session: AsyncSession,
+    file_obj: File,
+    credentials: Credentials,
+    chunker: Chunker,
+) -> None:
+    """Extract and chunk Google Sheets file."""
+    sheets = await GoogleSheetsExtractor.extract_sheets(
+        file_obj.drive_file_id, credentials
+    )
+    chunks = chunker.chunk_sheets(sheets, file_obj.drive_file_id)
 
     for chunk_data in chunks:
         chunk = Chunk(
@@ -396,8 +463,6 @@ def _get_skip_reason(mime_type: str) -> str | None:
         return "Binary/archive files not supported in v0.1"
 
     unsupported_types = {
-        "application/vnd.google-apps.presentation": "Google Slides not supported in v0.1",
-        "application/vnd.google-apps.spreadsheet": "Google Sheets not supported in v0.1",
         "application/msword": "Microsoft Word not supported in v0.1",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "Office documents not supported in v0.1",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "Office documents not supported in v0.1",
@@ -411,6 +476,8 @@ def _get_skip_reason(mime_type: str) -> str | None:
     supported_types = {
         "application/pdf",
         "application/vnd.google-apps.document",
+        "application/vnd.google-apps.presentation",
+        "application/vnd.google-apps.spreadsheet",
     }
 
     if mime_type not in supported_types:
