@@ -78,7 +78,7 @@ class EmbeddingClient:
                 raise
         raise RuntimeError(f"Failed to call Voyage API after {self.MAX_RETRIES} attempts")
 
-    async def _call_voyage_api(self, texts: list[str]) -> dict:
+    async def _call_voyage_api(self, texts: list[str]) -> dict[str, Any]:
         for attempt in range(self.MAX_RETRIES):
             try:
                 async with httpx.AsyncClient(timeout=30) as client:
@@ -100,7 +100,7 @@ class EmbeddingClient:
                             await asyncio.sleep(wait_seconds)
                             continue
                     response.raise_for_status()
-                    return response.json()
+                    return response.json()  # type: ignore[no-any-return]
             except httpx.RequestError:
                 if attempt < self.MAX_RETRIES - 1:
                     await asyncio.sleep(float(2 ** attempt))

@@ -86,7 +86,7 @@ class HybridSearch:
 
     async def _embed_query(self, query: str) -> list[float]:
         """Embed the query text."""
-        embeddings = await self.embedding_client.embed_chunks([query])
+        embeddings, _ = await self.embedding_client.embed_chunks([query])
         return embeddings[0]
 
     async def _search_vectors(
