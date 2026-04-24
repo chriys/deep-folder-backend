@@ -79,6 +79,9 @@ def _make_mock_llm(router_label: str = "simple"):
     """Create a mock LLMClient that classifies as router_label and streams a canned response."""
     mock_llm = MagicMock()
     mock_llm.generate = AsyncMock(return_value=(router_label, 5, 0))
+    mock_llm.generate_with_tools = AsyncMock(
+        return_value=("Based on the document, the answer is X.", None, 10, 5)
+    )
 
     async def mock_stream(system_prompt, user_prompt):
         yield "Based on the document, the answer is X."
@@ -317,7 +320,7 @@ async def test_send_message_returns_429_when_spend_cap_exceeded(app):
 
 
 @pytest.mark.asyncio
-async def test_send_message_complex_returns_501(app):
+async def test_send_message_complex_returns_orchestrator_response(app):
     _setup_auth(app)
 
     mock_conv = MagicMock()
@@ -325,7 +328,22 @@ async def test_send_message_complex_returns_501(app):
     mock_conv.folder_id = 1
     mock_conv.user_id = 1
 
-    session = _override_session(return_conversation=mock_conv)
+    mock_fld = MagicMock()
+    mock_fld.id = 1
+
+    session = AsyncMock(spec=AsyncSession)
+    result = MagicMock()
+    result.scalar_one_or_none.side_effect = [mock_conv, mock_fld]
+    result.scalar.return_value = 0.0
+    session.execute = AsyncMock(return_value=result)
+    session.add = MagicMock()
+    session.commit = AsyncMock()
+
+    async def refresh_side_effect(obj):
+        if hasattr(obj, "id") and obj.id is None:
+            obj.id = 100
+
+    session.refresh = AsyncMock(side_effect=refresh_side_effect)
 
     async def _get_session():
         yield session
@@ -348,12 +366,12 @@ async def test_send_message_complex_returns_501(app):
                 json={"content": "Compare the documents"},
             )
 
-    assert response.status_code == 501
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
     events = _parse_sse(response.text)
-    assert len(events) == 1
-    assert events[0]["event"] == "error"
-    assert events[0]["data"]["code"] == "not_implemented"
-    assert "complex" in events[0]["data"]["message"]
+    assert len(events) >= 2
+    assert events[0]["event"] == "text_delta"
+    assert events[-1]["event"] == "done"
 
 
 @pytest.mark.asyncio

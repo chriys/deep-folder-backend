@@ -15,7 +15,8 @@ from deepfolder.models.conversation import Conversation, Message
 from deepfolder.models.folder import Folder
 from deepfolder.models.user import User
 from deepfolder.query_router import QueryRouter
-from deepfolder.usage_tracker import UsageTracker, SpendCapExceeded
+from deepfolder.services.agent_orchestrator import AgentOrchestrator
+from deepfolder.usage_tracker import SpendCapExceeded, UsageTracker
 
 router = APIRouter(prefix="/conversations")
 
@@ -236,7 +237,21 @@ async def send_message(
         )
 
     if label == "complex":
-        return _handle_not_supported("complex")
+        folder_result = await db.execute(
+            select(Folder).where(Folder.id == conversation.folder_id)
+        )
+        folder = folder_result.scalar_one_or_none()
+
+        orchestrator = AgentOrchestrator(llm=llm, usage_tracker=tracker)
+        return StreamingResponse(
+            orchestrator.run(
+                session=db,
+                conversation=conversation,
+                message=user_msg,
+                folder=folder,
+            ),
+            media_type="text/event-stream",
+        )
 
     return _handle_not_supported("task")
 

@@ -1,4 +1,5 @@
 import json
+from typing import Any
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -34,6 +35,44 @@ class LLMClient:
             output_tokens = usage.get("completion_tokens", 0)
             content = data["choices"][0]["message"]["content"]
             return content, input_tokens, output_tokens
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+    )
+    async def generate_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> tuple[str | None, list[dict[str, Any]] | None, int, int]:
+        """Generate response with OpenAI-compatible tool calling support.
+
+        Returns (content, tool_calls, input_tokens, output_tokens).
+        content may be None when tool_calls are present.
+        """
+        body: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+        }
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
+
+        async with httpx.AsyncClient(timeout=120) as client:
+            response = await client.post(
+                f"{self.base_url}/chat/completions",
+                json=body,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+            )
+            response.raise_for_status()
+            data = response.json()
+            usage = data.get("usage", {})
+            input_tokens = usage.get("prompt_tokens", 0)
+            output_tokens = usage.get("completion_tokens", 0)
+            choice = data["choices"][0]["message"]
+            content = choice.get("content")
+            tool_calls = choice.get("tool_calls")
+            return content, tool_calls, input_tokens, output_tokens
 
     async def generate_stream(self, system_prompt: str, user_prompt: str):
         """Async generator yielding content deltas from the streaming LLM API."""
