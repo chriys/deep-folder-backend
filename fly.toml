@@ -5,7 +5,7 @@ primary_region = "iad"
   dockerfile = "Dockerfile"
 
 [deploy]
-  release_command = "sh -c 'alembic upgrade 001 && alembic upgrade 0010 && alembic upgrade 0011'"
+  release_command = "alembic upgrade head"
 
 [env]
   PORT = "8080"

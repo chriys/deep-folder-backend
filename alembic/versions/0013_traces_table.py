@@ -1,7 +1,7 @@
 """traces table
 
-Revision ID: 0012
-Revises: 0010, 0011
+Revision ID: 0013
+Revises: 043b83208f13
 Create Date: 2026-04-24
 
 """
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0012"
-down_revision: str | Sequence[str] | None = ("0010", "0011")
+revision: str = "0013"
+down_revision: str | Sequence[str] | None = "043b83208f13"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
