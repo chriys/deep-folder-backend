@@ -1,4 +1,3 @@
-import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -65,10 +64,9 @@ async def create_folder(
     await session.flush()
 
     job = Job(
-        job_type="ingest_folder",
+        kind="ingest_folder",
         status="pending",
-        payload=json.dumps({"folder_id": folder.id}),
-        user_id=user.id,
+        payload={"folder_id": folder.id, "user_id": user.id},
     )
     session.add(job)
     await session.commit()
@@ -151,23 +149,21 @@ async def sync_folder(
             and_(
                 Job.status == "pending",
                 or_(
-                    Job.job_type == "sync_folder",
-                    Job.job_type == "ingest_folder"
+                    Job.kind == "sync_folder",
+                    Job.kind == "ingest_folder"
                 ),
             )
         )
     )
 
     for job in existing_jobs.scalars():
-        job_payload = json.loads(job.payload)
-        if job_payload.get("folder_id") == folder_id:
+        if job.payload.get("folder_id") == folder_id:
             raise HTTPException(status_code=409, detail="Sync or ingest already in progress")
 
     job = Job(
-        job_type="sync_folder",
+        kind="sync_folder",
         status="pending",
-        payload=json.dumps({"folder_id": folder_id}),
-        user_id=user.id,
+        payload={"folder_id": folder_id, "user_id": user.id},
     )
     session.add(job)
     await session.commit()
