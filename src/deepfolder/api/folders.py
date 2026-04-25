@@ -17,17 +17,25 @@ router = APIRouter(prefix="/folders", tags=["folders"])
 
 
 class FolderResponse(BaseModel):
-    id: int
-    user_id: int
-    drive_folder_id: str
-    name: str
-    state: str
+    id: str
+    drive_url: str
+    ingest_state: str
     file_count: int
+    skipped_file_count: int = 0
+    error_message: str | None = None
     created_at: datetime
-    updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    @classmethod
+    def from_model(cls, folder: Folder) -> "FolderResponse":
+        return cls(
+            id=str(folder.id),
+            drive_url=f"https://drive.google.com/drive/folders/{folder.drive_folder_id}",
+            ingest_state=folder.state,
+            file_count=folder.file_count,
+            skipped_file_count=0,
+            error_message=None,
+            created_at=folder.created_at,
+        )
 
 
 @router.post("")
@@ -71,7 +79,7 @@ async def create_folder(
     session.add(job)
     await session.commit()
 
-    return FolderResponse.model_validate(folder).model_dump(mode="json")
+    return FolderResponse.from_model(folder).model_dump(mode="json")
 
 
 @router.get("")
@@ -84,7 +92,7 @@ async def list_folders(
         select(Folder).where(Folder.user_id == user.id)
     )
     folders = result.scalars().all()
-    return [FolderResponse.model_validate(f).model_dump(mode="json") for f in folders]
+    return [FolderResponse.from_model(f).model_dump(mode="json") for f in folders]
 
 
 @router.get("/{folder_id}")
@@ -103,7 +111,7 @@ async def get_folder(
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
 
-    return FolderResponse.model_validate(folder).model_dump(mode="json")
+    return FolderResponse.from_model(folder).model_dump(mode="json")
 
 
 @router.delete("/{folder_id}")
