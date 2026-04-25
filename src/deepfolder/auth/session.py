@@ -19,7 +19,7 @@ class SessionManager:
             token,
             max_age=SESSION_MAX_AGE,
             httponly=True,
-            samesite="lax",
+            samesite="none",
             secure=True,
         )
 
